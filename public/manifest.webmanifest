@@ -1,0 +1,23 @@
+{
+  "name": "Sanoa",
+  "short_name": "Sanoa",
+  "description": "Learn words from everyday life.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fbf7ef",
+  "theme_color": "#fbf7ef",
+  "icons": [
+    {
+      "src": "/assets/lingo-sauna-app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/lingo-sauna-app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

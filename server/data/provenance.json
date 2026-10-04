@@ -1,0 +1,23 @@
+{
+  "kotus": {
+    "title": "Nykysuomen sanalista 2024",
+    "publisher": "Kotimaisten kielten keskus",
+    "url": "https://kotus.fi/sanakirjat/kielitoimiston-sanakirja/nykysuomen-sana-aineistot/nykysuomen-sanalista/",
+    "download": "https://kaino.kotus.fi/lataa/nykysuomensanalista2024.txt",
+    "license": "CC BY 4.0",
+    "sha256": "bfa3d6a630fdff100d7765ee057f55f9b5b0c25045dbdfa809d3e4d1b4473cb3"
+  },
+  "ftb": {
+    "title": "UD Finnish FTB",
+    "publisher": "FinnTreeBank / Universal Dependencies",
+    "url": "https://universaldependencies.org/treebanks/fi_ftb/",
+    "repository": "https://github.com/UniversalDependencies/UD_Finnish-FTB",
+    "license": "CC BY 4.0",
+    "sourceHashes": {
+      "fi_ftb-ud-train.conllu": "cc8c5290f26d16219c97f587a68ccfd86e2f3a4232998eb0d523642a316a1ce9",
+      "fi_ftb-ud-dev.conllu": "676c3e0d09f2ee6c23ab8e8fef4dad86e56693beb742c1a9b2761e36bbac5c4c",
+      "fi_ftb-ud-test.conllu": "f7b738e86bf79c4c2db18ad8141649b175846d9f57c452ac1ca8671cc34f954e"
+    },
+    "derived": "Unique lemma–surface-form pairs only; not frequency estimates or example sentences."
+  }
+}
