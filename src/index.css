@@ -15,6 +15,9 @@
     background-size: auto, 44px 44px, 44px 44px, auto;
   }
   body { @apply min-h-screen font-sans text-ink antialiased; background: transparent; }
+  @media (min-width: 640px) {
+    #root { display: grid; min-height: 100dvh; place-items: center; }
+  }
   h1, h2, h3 { text-wrap: balance; }
   ::selection { background: oklch(0.52 0.1 55 / .18); }
   [id] { scroll-margin-top: 5rem; }
@@ -23,6 +26,40 @@
 }
 
 @layer components {
+  .onboarding-visual { container: onboarding-visual / size; }
+  .onboarding-phone { transform-origin: bottom center; }
+
+  @container onboarding-visual (max-height: 499px) {
+    .onboarding-phone { transform: scale(.88); }
+  }
+  @container onboarding-visual (max-height: 449px) {
+    .onboarding-phone { transform: scale(.82); }
+  }
+  @container onboarding-visual (max-height: 405px) {
+    .onboarding-phone { transform: scale(.75); }
+  }
+  @container onboarding-visual (max-height: 375px) {
+    .onboarding-phone { transform: scale(.62); }
+  }
+  @container onboarding-visual (max-height: 319px) {
+    .onboarding-phone { transform: scale(.52); }
+  }
+
+  .onboarding-choice-hero { height: 220px; }
+  .onboarding-choice-art { top: max(28px, env(safe-area-inset-top)); height: 205px; width: 205px; }
+  .onboarding-choice-copy { padding-top: 76px; }
+
+  @media (max-height: 760px) {
+    .onboarding-choice-hero { height: 170px; }
+    .onboarding-choice-art { top: max(20px, env(safe-area-inset-top)); height: 150px; width: 150px; }
+    .onboarding-choice-copy { padding-top: 40px; }
+  }
+  @media (max-height: 650px) {
+    .onboarding-choice-hero { height: 116px; }
+    .onboarding-choice-art { top: max(16px, env(safe-area-inset-top)); height: 100px; width: 100px; }
+    .onboarding-choice-copy { padding-top: 16px; }
+  }
+
   .home-canvas {
     background:
       linear-gradient(

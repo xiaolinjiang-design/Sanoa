@@ -1185,7 +1185,7 @@ function App() {
 
   return (
     <ShowIpaContext.Provider value={profileSettings.showIpa}>
-    <main className="relative mx-auto h-[100dvh] w-full overflow-hidden bg-white sm:my-6 sm:h-[min(852px,calc(100dvh-3rem))] sm:w-[393px] sm:rounded-[36px] sm:shadow-[0_28px_80px_rgba(0,0,0,.48)]">
+    <main className="relative mx-auto h-[100dvh] w-full overflow-hidden bg-white sm:h-[min(852px,100dvh)] sm:w-[393px] sm:rounded-[36px] sm:shadow-[0_28px_80px_rgba(0,0,0,.48)]">
       <a href="#content" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-white focus:px-3 focus:py-2">Skip to content</a>
       <div ref={scrollViewportRef} className={cn('h-full overflow-y-auto overscroll-contain', showBottomNav && 'dock-scroll pb-[calc(8rem+env(safe-area-inset-bottom))]')}>
         {!targetLanguage ? (
@@ -1244,7 +1244,7 @@ function LanguageChoice({ onSelect, initialLanguage = null, goalOnly = false }) 
       body: 'Photograph a thing or a short phrase you meet in real life.',
       visual: (
         <div className="relative isolate flex h-full items-end justify-center overflow-hidden bg-[#f7f3ee] pb-5 [background-image:radial-gradient(rgba(158,94,45,.12)_1px,transparent_1px)] [background-size:16px_16px]">
-          <div className="relative h-[472px] w-[236px] overflow-hidden rounded-[38px] border-[5px] border-[#2b2633] bg-white shadow-[0_22px_50px_rgba(43,38,51,.20)]">
+          <div className="onboarding-phone relative h-[472px] w-[236px] shrink-0 overflow-hidden rounded-[38px] border-[5px] border-[#2b2633] bg-white shadow-[0_22px_50px_rgba(43,38,51,.20)]">
             <img src="/assets/reindeer-coffee-break.png" width="512" height="512" alt="A coffee cup in the camera view" className="pointer-events-none absolute inset-0 h-[78%] w-full select-none object-cover" />
             <div className="absolute inset-x-0 top-0 flex h-12 items-center justify-between bg-gradient-to-b from-black/35 to-transparent px-4 text-[10px] font-bold text-white"><span>9:41</span><span>● ●●</span></div>
             <div className="absolute left-[88px] top-[148px] h-[88px] w-[88px] rounded-[20px] bg-white/[.06] shadow-[0_0_0_1px_rgba(255,255,255,.18)]" aria-hidden="true">
@@ -1266,7 +1266,7 @@ function LanguageChoice({ onSelect, initialLanguage = null, goalOnly = false }) 
       body: 'Get the sticker, pronunciation, and a sentence—not another lonely flashcard.',
       visual: (
         <div className="relative isolate flex h-full items-end justify-center overflow-hidden bg-[#f7f3ee] pb-5 [background-image:radial-gradient(rgba(158,94,45,.12)_1px,transparent_1px)] [background-size:16px_16px]">
-          <div className="relative h-[472px] w-[236px] overflow-hidden rounded-[38px] border-[5px] border-[#2b2633] bg-[linear-gradient(180deg,#fff8df,#fff_72%)] shadow-[0_22px_50px_rgba(43,38,51,.20)]">
+          <div className="onboarding-phone relative h-[472px] w-[236px] shrink-0 overflow-hidden rounded-[38px] border-[5px] border-[#2b2633] bg-[linear-gradient(180deg,#fff8df,#fff_72%)] shadow-[0_22px_50px_rgba(43,38,51,.20)]">
             <div className="absolute left-1/2 top-[54px] -translate-x-1/2">
               <div className="pointer-events-none absolute left-1/2 top-1/2 h-[190px] w-[190px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,rgba(255,220,98,.7)_0%,rgba(255,230,145,.34)_38%,transparent_70%)] blur-[2px]" aria-hidden="true" />
               <div className="word-found-rays pointer-events-none absolute left-1/2 top-1/2 h-[190px] w-[190px] -translate-x-1/2 -translate-y-1/2" aria-hidden="true" />
@@ -1316,23 +1316,23 @@ function LanguageChoice({ onSelect, initialLanguage = null, goalOnly = false }) 
       </div>
 
       {page < lastPage - 1 ? (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="h-[65dvh] min-h-0 shrink-0 overflow-hidden sm:h-[554px]">{screens[page].visual}</div>
-          <div className="px-5 pb-1 pt-6">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <div className="onboarding-visual min-h-[280px] flex-1 overflow-hidden">{screens[page].visual}</div>
+          <div className="shrink-0 px-5 pb-1 pt-6">
             <p className="text-xs font-bold uppercase tracking-[.2em] text-cinnamon">{screens[page].eyebrow}</p>
             <h1 className="mt-2 max-w-[340px] text-balance text-[30px] font-semibold leading-[1.08] tracking-[-.04em] text-ink">{screens[page].title}</h1>
             <p className="mt-3 max-w-[335px] text-pretty text-[15px] leading-6 text-stone-600">{screens[page].body}</p>
           </div>
         </div>
       ) : page === lastPage - 1 ? (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="relative h-[220px] shrink-0 pt-[max(54px,env(safe-area-inset-top))]">
-            <div className="pointer-events-none absolute left-1/2 top-[max(28px,env(safe-area-inset-top))] h-[205px] w-[205px] -translate-x-1/2 select-none" aria-hidden="true">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <div className="onboarding-choice-hero relative shrink-0 pt-[max(54px,env(safe-area-inset-top))]">
+            <div className="onboarding-choice-art pointer-events-none absolute left-1/2 -translate-x-1/2 select-none" aria-hidden="true">
               <div className="absolute inset-3 rounded-full bg-[#fee1b8]/70 blur-2xl" />
               <img src="/assets/reindeer-forest-hiking.png" width="512" height="512" alt="" className="relative h-full w-full rounded-[32px] object-cover" />
             </div>
           </div>
-          <div className="px-5 pt-[76px]">
+          <div className="onboarding-choice-copy px-5">
             <p className="text-xs font-bold uppercase tracking-[.2em] text-cinnamon">Choose your trail</p>
             <h1 className="mt-2 text-balance text-[30px] font-semibold leading-[1.08] tracking-[-.04em] text-ink">Which language are we learning?</h1>
             <p className="mt-2 text-[15px] leading-6 text-stone-600">You can change this later in Profile.</p>
@@ -1348,13 +1348,13 @@ function LanguageChoice({ onSelect, initialLanguage = null, goalOnly = false }) 
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="relative h-[220px] shrink-0 pt-[max(54px,env(safe-area-inset-top))]">
-            <div className="pointer-events-none absolute left-1/2 top-[max(28px,env(safe-area-inset-top))] h-[205px] w-[205px] -translate-x-1/2 select-none" aria-hidden="true">
+          <div className="onboarding-choice-hero relative shrink-0 pt-[max(54px,env(safe-area-inset-top))]">
+            <div className="onboarding-choice-art pointer-events-none absolute left-1/2 -translate-x-1/2 select-none" aria-hidden="true">
               <div className="absolute inset-3 rounded-full bg-[#fee1b8]/70 blur-2xl" />
               <img src="/assets/reindeer-berry-picking.png" width="512" height="512" alt="" className="relative h-full w-full rounded-[32px] object-cover" />
             </div>
           </div>
-          <div className="px-5 pt-[76px]">
+          <div className="onboarding-choice-copy px-5">
             <p className="text-xs font-bold uppercase tracking-[.2em] text-cinnamon">A reason to begin</p>
             <h1 className="mt-2 text-balance text-[30px] font-semibold leading-[1.08] tracking-[-.04em] text-ink">What brings you to {languages[selectedLanguage]?.name || 'this language'}?</h1>
             <div className="mt-5 pb-4"><LearningGoalOptions value={selectedGoal} onChange={setSelectedGoal} compact /></div>
