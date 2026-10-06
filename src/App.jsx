@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
-import { ArrowUpRight, BookOpen, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Coffee, Crop, DoorOpen, Droplet, Eye, Flame, Footprints, HelpCircle, Home, KeyRound, Languages, Mail, MessageSquareText, Pencil, RotateCcw, ShieldCheck, Sparkles, Trash2, UserRound, Volume2, X } from 'lucide-react'
+import { flushSync } from 'react-dom'
+import { ArrowUpRight, BookOpen, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Coffee, DoorOpen, Droplet, Eye, Flame, Footprints, HelpCircle, Home, KeyRound, Languages, Mail, MessageSquareText, Pencil, RotateCcw, ShieldCheck, Sparkles, Trash2, UserRound, Volume2, X } from 'lucide-react'
 import { dailyVerbNotes } from './dailyVerbNotes'
 import { resolveDailyVerbPhrases } from './dailyVerbLesson'
 import { pickDistinctStickerChoices } from './quizChoices'
@@ -120,7 +121,7 @@ function persistValue(key, value) {
 }
 
 function savedReviewItem(item) {
-  const { captureImage, photoCropImage, ...serializableItem } = item
+  const { captureImage, photoCropImage, cutoutImage, ...serializableItem } = item
   return serializableItem
 }
 
@@ -731,10 +732,14 @@ function App() {
   const scrollViewportRef = useRef(null)
   const [targetLanguage, setTargetLanguage] = useState(() => readStoredValue('lingo-target-language', null))
   const [step, setStep] = useState('home')
-  const [saved, setSaved] = useState(false)
   const [captureMode, setCaptureMode] = useState('object')
   const [capturedImage, setCapturedImage] = useState('')
   const [captureResult, setCaptureResult] = useState(null)
+  const [stickerEdit, setStickerEdit] = useState(null)
+  const [captureCutout, setCaptureCutout] = useState(null)
+  const [captureWord, setCaptureWord] = useState(null)
+  const [captureProgress, setCaptureProgress] = useState(0)
+
   const [captureError, setCaptureError] = useState('')
   const [captureStage, setCaptureStage] = useState(0)
   const [storageError, setStorageError] = useState('')
@@ -903,7 +908,10 @@ function App() {
   }, [savedDailyWords, targetLanguage])
 
   const openCamera = (mode = 'object') => {
-    setSaved(false)
+    setStickerEdit(null)
+    setCaptureCutout(null)
+    setCaptureWord(null)
+    setCaptureProgress(0)
     setStorageError('')
     setCaptureMode(mode)
     setCapturedImage('')
@@ -915,48 +923,68 @@ function App() {
   const analyzeCapture = async (image) => {
     setCapturedImage(image)
     setCaptureResult(null)
+    setCaptureCutout(null)
+    setCaptureWord(null)
+    setCaptureProgress(0)
     setCaptureError('')
     setCaptureStage(0)
     setStep('analyzing')
 
     try {
+      let cutoutReadyAt = 0
+      const onCutoutProgress = (stage, current, total) => {
+        const fraction = total > 0 ? current / total : 0
+        const progress = stage.startsWith('fetch:') ? .08 + fraction * .58
+          : stage === 'compute:decode' ? .7
+            : stage === 'compute:inference' ? .78
+              : stage === 'compute:mask' ? .9 : .96
+        setCaptureProgress((previous) => Math.max(previous, Math.round(progress * 20) / 20))
+      }
+      const earlyCutout = captureMode === 'object'
+        ? prepareEarlyCutout(image, onCutoutProgress).then((assets) => {
+          cutoutReadyAt = Date.now()
+          setCaptureCutout(assets)
+          setCaptureProgress(1)
+          setCaptureStage(1)
+          return assets
+        }).catch((error) => {
+          console.error('Early foreground segmentation failed.', error)
+          return null
+        })
+        : null
       const analysisRequest = fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image, captureMode, targetLanguage: languages[targetLanguage].name }),
       })
-      const [response] = await Promise.all([
-        analysisRequest,
-        new Promise((resolve) => window.setTimeout(resolve, 900)),
-      ])
+      const response = await analysisRequest
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error || 'Could not analyze this photo.')
-      setCaptureStage(1)
+      setCaptureWord(payload.result)
+      if (captureMode === 'phrase') setCaptureStage(1)
       let stickerImage = ''
       let photoCropImage = ''
       let cutoutIsTransparent = false
       if (captureMode === 'object') {
-        const focusedImage = await cropPhotoToBox(image, payload.result.boundingBox)
-        photoCropImage = await resizeStickerImage(focusedImage, 640)
-        try {
-          const { removeBackground } = await import('@imgly/background-removal')
-          const cutoutConfig = {
-            model: 'isnet_fp16',
-            device: 'cpu',
-            output: { format: 'image/png', quality: 1, type: 'foreground' },
-          }
-          let cutout
-          try {
-            cutout = await removeBackground(focusedImage, cutoutConfig)
-          } catch {
-            cutout = await removeBackground(image, cutoutConfig)
-          }
-          stickerImage = await resizeStickerImage(await blobToDataUrl(cutout))
+        const assets = await earlyCutout
+        if (assets) {
+          stickerImage = await resizeStickerImage(await cropPhotoToBox(assets.foregroundImage, payload.result.boundingBox))
           cutoutIsTransparent = true
-        } catch (cutoutError) {
-          console.error('Foreground segmentation failed.', cutoutError)
-          throw new Error('We found the object, but could not finish its sticker. Try processing it again.')
+        } else {
+          try {
+            const focusedImage = await cropPhotoToBox(image, payload.result.boundingBox)
+            const fallbackAssets = await prepareEarlyCutout(focusedImage, onCutoutProgress)
+            stickerImage = fallbackAssets.stickerImage
+            cutoutIsTransparent = true
+            cutoutReadyAt = Date.now()
+            setCaptureCutout({ ...fallbackAssets, outlineImage: null })
+            setCaptureProgress(1)
+          } catch (cutoutError) {
+            console.error('Foreground segmentation failed.', cutoutError)
+            throw new Error('We found the object, but could not finish its sticker. Try processing it again.')
+          }
         }
+        photoCropImage = await resizeStickerImage(await cropPhotoToBox(image, payload.result.boundingBox), 640)
       } else {
         stickerImage = await resizeStickerImage(await cropPhotoToBox(image, payload.result.boundingBox), 640)
       }
@@ -968,11 +996,18 @@ function App() {
         captureImage: image,
         photoCropImage,
         stickerImage,
+        cutoutImage: stickerImage,
         cutoutIsTransparent,
       })
       setCaptureStage(2)
-      if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) await new Promise((resolve) => window.setTimeout(resolve, 240))
-      setStep('adjust')
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      const hold = reducedMotion ? 80 : Math.max(380, 1150 - (Date.now() - cutoutReadyAt))
+      await new Promise((resolve) => window.setTimeout(resolve, hold))
+      if (captureMode === 'object' && !reducedMotion && typeof document.startViewTransition === 'function') {
+        document.startViewTransition(() => flushSync(() => setStep('result')))
+      } else {
+        setStep('result')
+      }
     } catch (error) {
       setCaptureError(error.message || 'Could not analyze this photo.')
     }
@@ -984,7 +1019,6 @@ function App() {
     setReviewItemsByLanguage((current) => current[languageKey] ? current : { ...current, [languageKey]: reviewSeeds[languageKey] })
     setTargetLanguage(languageKey)
     setStep('home')
-    setSaved(false)
     setCelebrationOpen(false)
   }
   const saveSticker = () => {
@@ -1001,11 +1035,12 @@ function App() {
       return
     }
     setStorageError('')
-    setSaved(true)
     setReviewItemsByLanguage(nextLibrary)
     setReviewScheduleByLanguage((current) => ({ ...current, [targetLanguage]: { ...(current[targetLanguage] || {}), [captureResult.word]: { stage: 0, dueAt: Date.now() } } }))
     recordSaunaCapture(captureResult.word)
-    setStep('result')
+    const collection = getWordCollections(nextItems).find((candidate) => candidate.items.some((item) => item.word === captureResult.word))
+    if (collection) setCollectionDetail(collection)
+    setStep(collection ? 'collection' : 'review')
   }
   const addRelatedWord = (word) => {
     updateReviewItems((items) => items.some((item) => item.word === word.word) ? items : [word, ...items])
@@ -1156,12 +1191,6 @@ function App() {
     setCollectionDetail(collection)
     setStep('collection')
   }
-  const openSavedCaptureCollection = () => {
-    const collectionName = captureResult?.collection
-    const collection = getWordCollections(reviewItems).find((candidate) => candidate.name === collectionName)
-    if (collection) openCollection(collection)
-    else setStep('review')
-  }
   const dailyDetailItems = targetLanguage && detailItem ? dailyVerbs : []
   const detailSequence = dailyDetailItems.some((item) => item.word === detailItem?.word) ? dailyDetailItems : []
   useEffect(() => {
@@ -1177,7 +1206,13 @@ function App() {
     setDetailItem(nextItem)
   }
   const needsLearningGoal = Boolean(targetLanguage && !learningGoalsByLanguage[targetLanguage])
-  const showBottomNav = Boolean(targetLanguage && !needsLearningGoal && !['camera', 'analyzing', 'adjust', 'result', 'quiz', 'matching', 'detail'].includes(step))
+  const showBottomNav = Boolean(targetLanguage && !needsLearningGoal && !['camera', 'analyzing', 'result', 'quiz', 'matching', 'detail'].includes(step))
+  const previewItem = stickerEdit && captureResult ? {
+    ...captureResult,
+    stickerImage: stickerEdit.usePhoto ? captureResult.photoCropImage : captureResult.cutoutImage || captureResult.stickerImage,
+    cutoutIsTransparent: !stickerEdit.usePhoto && captureResult.kind === 'object',
+    stickerAdjustment: stickerEdit,
+  } : captureResult
 
   useEffect(() => {
     if (step === 'detail') scrollViewportRef.current?.scrollTo(0, 0)
@@ -1200,9 +1235,7 @@ function App() {
         ) : step === 'camera' ? (
           <CameraView language={languages[targetLanguage]} captureMode={captureMode} onCaptureModeChange={setCaptureMode} onBack={() => setStep('home')} onRecognize={analyzeCapture} />
         ) : step === 'analyzing' ? (
-          <AnalyzingView captureMode={captureMode} image={capturedImage} stage={captureStage} error={captureError} onRetry={() => setStep('camera')} />
-        ) : step === 'adjust' ? (
-          <StickerAdjustView item={captureResult} onRetake={() => setStep('camera')} onContinue={({ usePhoto, ...adjustment }) => { setCaptureResult((current) => ({ ...current, stickerImage: usePhoto ? current.photoCropImage : current.stickerImage, cutoutIsTransparent: usePhoto ? false : current.cutoutIsTransparent, stickerAdjustment: adjustment })); setStep('result') }} />
+          <AnalyzingView captureMode={captureMode} image={capturedImage} stage={captureStage} cutout={captureCutout} word={captureWord} progress={captureProgress} language={languages[targetLanguage]} error={captureError} onRetry={() => setStep('camera')} />
         ) : step === 'review' ? (
           <ReviewView items={reviewItems} practiceItems={practiceItems} dueCount={dueReviewItems.length} logAvailable={!dailyFika.tasks.includes('recall') && (dailyFika.woodCount || 0) < 3} woodFull={(dailyFika.woodCount || 0) >= 3} onCapture={() => openCamera('object')} onStartQuiz={startQuiz} onOpenCollection={openCollection} />
         ) : step === 'quiz' ? (
@@ -1218,9 +1251,13 @@ function App() {
             ? <DailyVerbView key={detailItem.word} item={detailItem} language={languages[targetLanguage]} reviewItems={reviewItems} detailSequence={detailSequence} learnedDailyWords={savedDailyWords} onPrevious={() => moveDetail(-1)} onNext={() => moveDetail(1)} onBack={() => setStep(detailBackStep)} onLearnDailyWord={markDailyWordSaved} />
             : <WordDetailView item={detailItem} language={languages[targetLanguage]} reviewItems={reviewItems} onBack={() => setStep(detailBackStep)} onAddRelatedWord={addRelatedWord} onDelete={deleteSticker} onPhraseTranslation={savePhraseTranslation} />
         ) : (
-          <ResultView language={languages[targetLanguage]} item={captureResult} captureMode={captureMode} saved={saved} storageError={storageError} autoPlayPronunciation={profileSettings.autoplay} onRetake={() => setStep('camera')} onDone={() => setStep('home')} onSave={saveSticker} onCaptureAnother={() => openCamera(captureMode)} onViewCollection={openSavedCaptureCollection} />
+          <ResultView language={languages[targetLanguage]} item={previewItem} captureMode={captureMode} storageError={storageError} autoPlayPronunciation={profileSettings.autoplay} onRetake={() => setStep('camera')} onEdit={() => setStickerEdit({ scale: captureResult?.stickerAdjustment?.scale ?? 1, rotation: captureResult?.stickerAdjustment?.rotation ?? 0, usePhoto: captureResult?.stickerAdjustment?.usePhoto ?? false })} onSave={saveSticker} />
         )}
       </div>
+      {stickerEdit && captureResult && <StickerAdjustSheet item={captureResult} adjustment={stickerEdit} onChange={setStickerEdit} onClose={() => setStickerEdit(null)} onSave={() => {
+        setCaptureResult((current) => ({ ...current, stickerImage: stickerEdit.usePhoto ? current.photoCropImage : current.cutoutImage || current.stickerImage, cutoutIsTransparent: !stickerEdit.usePhoto && current.kind === 'object', stickerAdjustment: stickerEdit }))
+        setStickerEdit(null)
+      }} />}
       {celebrationOpen && <DailyCelebration rewardEarned={dailyCelebrationRewardEarned} onClose={() => { setCelebrationOpen(false); setStep('home') }} />}
       {profileEditorOpen && <ProfileEditor profile={profile} onClose={() => setProfileEditorOpen(false)} onSave={(nextProfile) => { setProfile(nextProfile); setProfileEditorOpen(false) }} />}
       {feedbackOpen && <FeedbackSheet onClose={() => setFeedbackOpen(false)} />}
@@ -1613,6 +1650,137 @@ function resizeStickerImage(source, maxSide = 384) {
   })
 }
 
+let cutoutWorker = null
+let cutoutJobId = 0
+const cutoutJobs = new Map()
+
+function removeBackgroundOffThread(source, onProgress) {
+  if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined') return Promise.reject(new Error('Worker canvas unavailable.'))
+  return new Promise((resolve, reject) => {
+    try {
+      if (!cutoutWorker) {
+        cutoutWorker = new Worker(new URL('./cutout.worker.js', import.meta.url), { type: 'module' })
+        cutoutWorker.onmessage = ({ data }) => {
+          const job = cutoutJobs.get(data.id)
+          if (!job) return
+          if (data.type === 'progress') {
+            job.onProgress?.(data.stage, data.current, data.total)
+            return
+          }
+          cutoutJobs.delete(data.id)
+          if (data.type === 'complete') job.resolve(data.blob)
+          else job.reject(new Error(data.message))
+        }
+        cutoutWorker.onerror = () => {
+          for (const job of cutoutJobs.values()) job.reject(new Error('Cutout worker stopped.'))
+          cutoutJobs.clear()
+          cutoutWorker.terminate()
+          cutoutWorker = null
+        }
+      }
+      const id = ++cutoutJobId
+      cutoutJobs.set(id, { resolve, reject, onProgress })
+      cutoutWorker.postMessage({ id, source })
+    } catch (error) {
+      reject(error)
+    }
+  })
+}
+
+async function prepareEarlyCutout(source, onProgress) {
+  const scaledPhoto = await resizeStickerImage(source, 768)
+  const foreground = await removeBackgroundOffThread(scaledPhoto, onProgress).catch(async () => {
+    const { removeBackground } = await import('@imgly/background-removal')
+    return removeBackground(scaledPhoto, {
+      model: 'isnet_fp16',
+      device: 'cpu',
+      output: { format: 'image/png', quality: 1, type: 'foreground' },
+      progress: onProgress,
+    })
+  })
+  const foregroundUrl = await blobToDataUrl(foreground)
+  const image = await new Promise((resolve, reject) => {
+    const loaded = new Image()
+    loaded.onload = () => resolve(loaded)
+    loaded.onerror = () => reject(new Error('Could not read the object cutout.'))
+    loaded.src = foregroundUrl
+  })
+  const width = image.naturalWidth
+  const height = image.naturalHeight
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  context.drawImage(image, 0, 0)
+  const alpha = context.getImageData(0, 0, width, height).data
+  let left = width
+  let top = height
+  let right = 0
+  let bottom = 0
+  let foregroundPixels = 0
+  const edges = []
+
+  for (let y = 0; y < height; y += 3) {
+    let first = width
+    let last = -1
+    for (let x = 0; x < width; x += 2) {
+      if (alpha[(y * width + x) * 4 + 3] < 96) continue
+      first = Math.min(first, x)
+      last = x
+      foregroundPixels += 1
+    }
+    if (last < 0) continue
+    left = Math.min(left, first)
+    right = Math.max(right, last)
+    top = Math.min(top, y)
+    bottom = y
+    edges.push([first, last, y])
+  }
+  if (foregroundPixels < width * height * .002 || !edges.length) throw new Error('No usable object cutout was found.')
+
+  const outline = document.createElement('canvas')
+  outline.width = width
+  outline.height = height
+  const outlineContext = outline.getContext('2d')
+  outlineContext.strokeStyle = 'rgba(255,255,255,.96)'
+  outlineContext.lineWidth = Math.max(2, width / 260)
+  outlineContext.lineCap = 'round'
+  outlineContext.lineJoin = 'round'
+  outlineContext.setLineDash([8, 7])
+  outlineContext.beginPath()
+  edges.forEach(([first, , y], index) => index ? outlineContext.lineTo(first, y) : outlineContext.moveTo(first, y))
+  for (let index = edges.length - 1; index >= 0; index -= 1) outlineContext.lineTo(edges[index][1], edges[index][2])
+  outlineContext.closePath()
+  outlineContext.stroke()
+  outlineContext.setLineDash([])
+  outlineContext.lineWidth = Math.max(3, width / 180)
+  const corner = Math.max(13, Math.min(width, height) * .04)
+  const inset = Math.max(5, width * .012)
+  const x1 = Math.max(inset, left - inset)
+  const x2 = Math.min(width - inset, right + inset)
+  const y1 = Math.max(inset, top - inset)
+  const y2 = Math.min(height - inset, bottom + inset)
+  for (const [x, y, dx, dy] of [[x1, y1, 1, 1], [x2, y1, -1, 1], [x1, y2, 1, -1], [x2, y2, -1, -1]]) {
+    outlineContext.beginPath()
+    outlineContext.moveTo(x + dx * corner, y)
+    outlineContext.lineTo(x, y)
+    outlineContext.lineTo(x, y + dy * corner)
+    outlineContext.stroke()
+  }
+
+  const pad = Math.max(12, Math.round(Math.max(right - left, bottom - top) * .08))
+  const cropX = Math.max(0, left - pad)
+  const cropY = Math.max(0, top - pad)
+  const cropWidth = Math.min(width - cropX, right - cropX + pad)
+  const cropHeight = Math.min(height - cropY, bottom - cropY + pad)
+  const sticker = document.createElement('canvas')
+  const scale = Math.min(1, 384 / Math.max(cropWidth, cropHeight))
+  sticker.width = Math.max(1, Math.round(cropWidth * scale))
+  sticker.height = Math.max(1, Math.round(cropHeight * scale))
+  sticker.getContext('2d').drawImage(canvas, cropX, cropY, cropWidth, cropHeight, 0, 0, sticker.width, sticker.height)
+  return { stickerImage: sticker.toDataURL('image/png'), foregroundImage: foregroundUrl, outlineImage: outline.toDataURL('image/png') }
+}
+
 function cropPhotoToBox(source, boundingBox) {
   return new Promise((resolve, reject) => {
     const image = new Image()
@@ -1648,6 +1816,7 @@ function CameraView({ language, captureMode, onCaptureModeChange, onBack, onReco
   const isPhraseMode = captureMode === 'phrase'
   const videoRef = useRef(null)
   const fileInputRef = useRef(null)
+  const swipeStartRef = useRef(null)
   const [cameraReady, setCameraReady] = useState(false)
   const [cameraError, setCameraError] = useState('')
   const [photoError, setPhotoError] = useState('')
@@ -1710,49 +1879,132 @@ function CameraView({ language, captureMode, onCaptureModeChange, onBack, onReco
     }
   }
 
+  const startModeSwipe = (event) => {
+    if (event.target instanceof Element && event.target.closest('button, input')) return
+    const touch = event.touches[0]
+    swipeStartRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null
+  }
+
+  const finishModeSwipe = (event) => {
+    const start = swipeStartRef.current
+    swipeStartRef.current = null
+    const touch = event.changedTouches[0]
+    if (!start || !touch) return
+    const dx = touch.clientX - start.x
+    const dy = touch.clientY - start.y
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.3) return
+    onCaptureModeChange(dx < 0 ? 'phrase' : 'object')
+  }
+
   return (
-    <div id="content" className="min-h-full bg-white px-5 pb-6 pt-5 text-ink">
-      <header className="grid min-h-11 grid-cols-[44px_1fr_44px] items-center">
-        <button onClick={onBack} aria-label="Close camera" className="grid h-11 w-11 place-items-center rounded-full bg-[#F6F6F6] text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><ChevronLeft /></button>
+    <div id="content" onTouchStart={startModeSwipe} onTouchEnd={finishModeSwipe} onTouchCancel={() => { swipeStartRef.current = null }} className="relative h-full min-h-0 touch-pan-y overflow-hidden bg-[#1c2522] text-white">
+      <video ref={videoRef} muted playsInline autoPlay onLoadedMetadata={() => setCameraReady(true)} className={cn('absolute inset-0 h-full w-full object-cover transition-opacity duration-200', cameraReady ? 'opacity-100' : 'opacity-0')} />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(12,18,16,.60),transparent_28%,transparent_55%,rgba(12,18,16,.95))]" />
+
+      <header className="absolute inset-x-0 top-0 z-10 grid grid-cols-[44px_1fr_44px] items-center px-5 pt-[max(1.25rem,env(safe-area-inset-top))]">
+        <button onClick={onBack} aria-label="Close camera" className="grid h-11 w-11 place-items-center rounded-full border border-white/25 bg-black/30 text-white backdrop-blur-md transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white active:scale-[.96]"><ChevronLeft /></button>
         <h1 className="text-center font-serif text-xl font-bold">Capture</h1>
         <span aria-hidden="true" />
       </header>
-      <div className="mt-5 grid grid-cols-2 rounded-full bg-[#F6F6F6] p-1" aria-label="Choose what to capture">
-        {[
-          { key: 'object', label: 'Object', icon: Camera },
-          { key: 'phrase', label: 'Short phrase', icon: MessageSquareText },
-        ].map((mode) => (
-          <button key={mode.key} onClick={() => onCaptureModeChange(mode.key)} className={cn('flex min-h-11 items-center justify-center gap-2 rounded-full text-sm font-bold transition-[transform,background-color,color] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss active:scale-[0.97]', captureMode === mode.key ? 'bg-white text-ink shadow-[0_1px_4px_rgba(38,35,49,.08)]' : 'text-stone-500')} aria-pressed={captureMode === mode.key}><mode.icon size={17} />{mode.label}</button>
-        ))}
+
+      <div className="pointer-events-none absolute inset-x-0 top-[calc(max(1.25rem,env(safe-area-inset-top))+5.5rem)] z-10 px-6 text-center">
+        <h2 className="font-serif text-[22px] font-bold drop-shadow-md">{isPhraseMode ? 'Frame a short phrase' : 'Point at one thing'}</h2>
+        <p className="mt-1 text-sm font-medium text-white/85 drop-shadow-md">{isPhraseMode ? 'Signs and labels work best.' : 'Keep the object clear and centered.'}</p>
       </div>
 
-      <div className="mt-5 text-center">
-        <h2 className="font-serif text-2xl font-bold">{isPhraseMode ? 'Frame a short phrase' : 'Point at one thing'}</h2>
-        <p className="mt-1 text-sm text-stone-500">{isPhraseMode ? 'Signs and labels work best.' : 'Keep the object clear and centered.'}</p>
+      <div className="pointer-events-none absolute inset-x-[17%] top-[30%] bottom-[34%]" aria-hidden="true">
+        <span className="absolute left-0 top-0 h-8 w-8 rounded-tl-xl border-l-[3px] border-t-[3px] border-white/90" />
+        <span className="absolute right-0 top-0 h-8 w-8 rounded-tr-xl border-r-[3px] border-t-[3px] border-white/90" />
+        <span className="absolute bottom-0 left-0 h-8 w-8 rounded-bl-xl border-b-[3px] border-l-[3px] border-white/90" />
+        <span className="absolute bottom-0 right-0 h-8 w-8 rounded-br-xl border-b-[3px] border-r-[3px] border-white/90" />
       </div>
 
-      <div className="relative mt-5 grid aspect-[3/4] place-items-center overflow-hidden rounded-[30px] bg-[#26312f] shadow-[inset_0_0_0_1px_rgba(38,35,49,.05)]">
-        <video ref={videoRef} muted playsInline autoPlay onLoadedMetadata={() => setCameraReady(true)} className={cn('absolute inset-0 h-full w-full object-cover transition-opacity', cameraReady ? 'opacity-100' : 'opacity-0')} />
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(255,255,255,.08),rgba(38,35,49,.08))]" />
-        <div className="absolute left-6 top-6 h-8 w-8 rounded-tl-xl border-l-[3px] border-t-[3px] border-white" /><div className="absolute right-6 top-6 h-8 w-8 rounded-tr-xl border-r-[3px] border-t-[3px] border-white" /><div className="absolute bottom-6 left-6 h-8 w-8 rounded-bl-xl border-b-[3px] border-l-[3px] border-white" /><div className="absolute bottom-6 right-6 h-8 w-8 rounded-br-xl border-b-[3px] border-r-[3px] border-white" />
-        {!cameraReady && <div className="relative max-w-[15rem] px-5 text-center text-white"><Camera className="mx-auto" size={34} /><p className="mt-3 text-sm font-semibold">{cameraError || 'Starting camera…'}</p></div>}
-      </div>
+      {!cameraReady && <div className="pointer-events-none absolute inset-0 grid place-items-center px-10 text-center"><p className="max-w-[17rem] text-sm font-semibold text-white/80">{cameraError || 'Starting camera…'}</p></div>}
 
-      <div className="mt-5 grid justify-items-center">
-        <button onClick={captureFrame} aria-label={isPhraseMode ? 'Capture phrase' : 'Capture object'} className="grid h-[76px] w-[76px] place-items-center rounded-full border-[5px] border-[#e7e5e4] bg-white shadow-[0_3px_10px_rgba(38,35,49,.10)] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss focus-visible:ring-offset-2 active:scale-[.94]">
-          <span className="grid h-14 w-14 place-items-center rounded-full bg-ink text-white"><Camera size={25} /></span>
+      <div className="absolute inset-x-0 bottom-0 z-10 flex flex-col items-center px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+        {photoError && <p role="alert" className="mb-3 rounded-xl bg-black/60 px-4 py-2 text-center text-sm font-semibold text-white">{photoError}</p>}
+        <button onClick={captureFrame} aria-label={cameraReady ? isPhraseMode ? 'Capture phrase' : 'Capture object' : isPhraseMode ? 'Select a phrase photo' : 'Select an object photo'} className="grid h-[82px] w-[82px] place-items-center rounded-full border-[5px] border-white bg-white/20 shadow-[0_5px_20px_rgba(0,0,0,.32)] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-[#1c2522] active:scale-[.94]">
+          <span className="grid h-[62px] w-[62px] place-items-center rounded-full bg-ink text-white"><Camera size={25} aria-hidden="true" /></span>
         </button>
-        <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={choosePhoto} className="sr-only" />
-        <button onClick={() => fileInputRef.current?.click()} className="mt-2 min-h-11 px-4 text-sm font-bold text-moss underline decoration-moss/30 underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss">Choose a photo</button>
-        <p className="max-w-[17rem] text-center text-xs font-medium leading-5 text-stone-500">Your photo is sent for recognition. Avoid personal or sensitive information.</p>
-        {photoError && <p role="alert" className="mt-2 text-center text-xs font-semibold text-red-600">{photoError}</p>}
+        <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={choosePhoto} className="hidden" tabIndex={-1} aria-hidden="true" />
+        <div className="relative mt-6 grid w-[min(100%,280px)] grid-cols-2 rounded-full border border-white/25 bg-black/45 p-1 shadow-[0_6px_20px_rgba(0,0,0,.18)] backdrop-blur-md" role="group" aria-label="Choose what to capture">
+          <span aria-hidden="true" className={cn('pointer-events-none absolute bottom-1 left-1 top-1 w-[calc(50%-4px)] rounded-full bg-white/20 shadow-[0_1px_5px_rgba(0,0,0,.18)] ring-1 ring-white/35 transition-transform duration-200 ease-out motion-reduce:transition-none', isPhraseMode && 'translate-x-full')} />
+          {[
+            { key: 'object', label: 'Object' },
+            { key: 'phrase', label: 'Short phrase' },
+          ].map((mode) => (
+            <button key={mode.key} onClick={() => onCaptureModeChange(mode.key)} className={cn('relative z-10 min-h-11 rounded-full px-2 text-sm font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white', captureMode === mode.key ? 'text-white' : 'text-white/65')} aria-pressed={captureMode === mode.key}>{mode.label}</button>
+          ))}
+        </div>
       </div>
     </div>
   )
 }
 
-function AnalyzingView({ captureMode, image, stage, error, onRetry }) {
+function ObjectLiftingView({ image, cutout, word, progress, language, error, onRetry }) {
+  const [phase, setPhase] = useState('scan')
+
+  useEffect(() => {
+    if (!cutout) return undefined
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setPhase('land')
+      return undefined
+    }
+    setPhase(cutout.outlineImage ? 'trace' : 'lift')
+    const liftTimer = window.setTimeout(() => setPhase('lift'), cutout.outlineImage ? 350 : 0)
+    const landTimer = window.setTimeout(() => setPhase('land'), cutout.outlineImage ? 720 : 330)
+    return () => {
+      window.clearTimeout(liftTimer)
+      window.clearTimeout(landTimer)
+    }
+  }, [cutout])
+
+  return (
+    <div id="content" className="capture-lifting relative isolate min-h-full overflow-hidden bg-[#fff9ef] text-center" data-phase={error ? 'error' : phase}>
+      <div className="capture-lifting-scene absolute inset-0">
+        {image && <img src={image} alt="Your captured photo" className="capture-lifting-photo h-full w-full object-cover" />}
+        <div className="capture-lifting-dim absolute inset-0 bg-ink/45" aria-hidden="true" />
+        {!error && <div className="capture-lifting-scan pointer-events-none absolute inset-x-[17%] top-[30%] bottom-[34%]" aria-hidden="true">
+          <span className="capture-lifting-scan-line absolute inset-x-4 top-1/2 h-px bg-white/70" />
+          <span className="absolute left-0 top-0 h-8 w-8 rounded-tl-xl border-l-[3px] border-t-[3px] border-white/85" />
+          <span className="absolute right-0 top-0 h-8 w-8 rounded-tr-xl border-r-[3px] border-t-[3px] border-white/85" />
+          <span className="absolute bottom-0 left-0 h-8 w-8 rounded-bl-xl border-b-[3px] border-l-[3px] border-white/85" />
+          <span className="absolute bottom-0 right-0 h-8 w-8 rounded-br-xl border-b-[3px] border-r-[3px] border-white/85" />
+        </div>}
+        {cutout?.outlineImage && !error && <img src={cutout.outlineImage} alt="" className="capture-lifting-outline pointer-events-none absolute inset-0 h-full w-full object-cover" aria-hidden="true" />}
+      </div>
+      <div className="capture-lifting-cream pointer-events-none absolute inset-0 bg-[#fff9ef]" aria-hidden="true" />
+
+      {!error && cutout && <div className="capture-lifting-sticker pointer-events-none absolute left-1/2 top-[39%] w-[min(62vw,246px)]" aria-hidden="true">
+        <img src={cutout.stickerImage} alt="" className="capture-lifting-sticker-body max-h-[32dvh] w-full object-contain" />
+        <img src={cutout.stickerImage} alt="" className="capture-lifting-sticker-border captured-sticker-cutout absolute inset-0 max-h-[32dvh] w-full object-contain" />
+        <span className="capture-lifting-sparkle capture-lifting-sparkle-one absolute -left-2 top-5" />
+        <span className="capture-lifting-sparkle capture-lifting-sparkle-two absolute -right-3 top-1/3" />
+        <span className="capture-lifting-sparkle capture-lifting-sparkle-three absolute bottom-3 right-4" />
+      </div>}
+
+      <div className="capture-lifting-eyebrow absolute inset-x-0 top-[max(1.5rem,env(safe-area-inset-top))] px-6 text-white" aria-live="polite" aria-hidden={phase === 'land'}>
+        <p className="text-xs font-bold uppercase tracking-[.15em]">{error ? 'Couldn’t finish' : phase === 'scan' ? 'Finding your sticker' : phase === 'trace' ? 'Object found' : 'Lifting your sticker'}</p>
+        {!error && phase === 'scan' && <div className="mx-auto mt-3 h-1 w-28 overflow-hidden rounded-full bg-white/30" role="progressbar" aria-label="Preparing sticker cutout" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}><span className="capture-lifting-progress block h-full w-full origin-left rounded-full bg-white" style={{ transform: `scaleX(${Math.max(.08, progress)})` }} /></div>}
+      </div>
+
+      {error ? <div className="absolute inset-x-6 bottom-[max(2rem,env(safe-area-inset-bottom))] rounded-[26px] bg-[#fff9ef] p-6 text-ink">
+        <h1 className="font-serif text-2xl font-bold">Let’s try that again</h1>
+        <p role="alert" className="mt-2 text-sm leading-6 text-red-700">{error}</p>
+        <Button onClick={onRetry} className="mt-5 w-full" size="lg">Try another photo</Button>
+      </div> : <>
+        <div className="capture-lifting-word absolute inset-x-6 bottom-[max(3rem,env(safe-area-inset-bottom))] text-ink" aria-live="polite">
+          <p className="text-xs font-bold uppercase tracking-[.15em] text-cinnamon">{language.name}</p>
+          {phase === 'land' && (word ? <><h1 className="capture-word-reveal mt-2 break-words font-serif text-[clamp(2.5rem,10vw,3.75rem)] font-bold leading-none">{word.word}</h1><p className="mt-2 text-base text-stone-600">{word.english}</p></> : <div className="capture-word-shimmer mx-auto mt-4 h-14 w-44 rounded-2xl" role="status" aria-label="Loading the word" />)}
+        </div>
+      </>}
+    </div>
+  )
+}
+
+function AnalyzingView({ captureMode, image, stage, cutout, word, progress, language, error, onRetry }) {
   const isPhraseMode = captureMode === 'phrase'
+  if (!isPhraseMode) return <ObjectLiftingView image={image} cutout={cutout} word={word} progress={progress} language={language} error={error} onRetry={onRetry} />
   const phases = isPhraseMode
     ? ['Reading the photo', 'Making your phrase sticker', 'Sticker ready']
     : ['Finding the object', 'Lifting it from the photo', 'Sticker ready']
@@ -1794,67 +2046,44 @@ function AnalyzingView({ captureMode, image, stage, error, onRetry }) {
   )
 }
 
-function StickerAdjustView({ item, onRetake, onContinue }) {
-  const [tool, setTool] = useState('crop')
-  const [scale, setScale] = useState(1)
-  const [rotation, setRotation] = useState(0)
-  const [usePhoto, setUsePhoto] = useState(false)
-  const image = usePhoto ? item?.photoCropImage : item?.stickerImage || item?.captureImage
-
-  if (!item || !image) return null
-
-  const reset = () => {
-    setScale(1)
-    setRotation(0)
-  }
-  const activeValue = tool === 'crop' ? scale : rotation
-  const sliderConfig = tool === 'crop'
-    ? { min: 0.8, max: 1.35, step: 0.01, label: 'Sticker size', valueText: `${Math.round(scale * 100)}%`, onChange: (value) => setScale(Number(value)) }
-    : { min: -12, max: 12, step: 1, label: 'Rotation', valueText: `${rotation}°`, onChange: (value) => setRotation(Number(value)) }
+function StickerAdjustSheet({ item, adjustment, onChange, onClose, onSave }) {
+  const dialogRef = useDialogFocus(onClose)
+  const setValue = (key, value) => onChange((current) => ({ ...current, [key]: value }))
 
   return (
-    <div id="content" className="result-screen-enter min-h-full bg-[#fff9ef] px-5 pb-7 pt-5 text-ink">
-      <header className="grid min-h-11 grid-cols-[44px_1fr_44px] items-center">
-        <button onClick={onRetake} aria-label="Retake photo" className="grid h-11 w-11 place-items-center rounded-full bg-[#f6f6f6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><ChevronLeft /></button>
-        <p className="text-center text-sm font-bold">Sticker preview</p>
-        <button onClick={reset} aria-label="Reset sticker adjustments" className="grid h-11 w-11 place-items-center rounded-full text-moss transition-[background-color,color] hover:bg-moss/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss active:scale-[.96]"><RotateCcw size={19} /></button>
-      </header>
-      <div className="mt-6 text-center">
-        <p className="text-xs font-bold uppercase tracking-[.14em] text-cinnamon">Your new sticker</p>
-        <h1 className="mt-2 font-serif text-3xl font-bold">Make it feel right</h1>
-        <p className="mx-auto mt-2 max-w-[19rem] text-sm leading-5 text-stone-500">Adjust it if you like, then learn the word.</p>
-      </div>
+    <div className="absolute inset-0 z-50 flex items-end bg-ink/35 sm:rounded-[36px]" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="sticker-edit-title" className="max-h-[min(76dvh,640px)] w-full overflow-y-auto overscroll-contain rounded-t-[30px] bg-white px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-4 text-ink shadow-[0_-16px_48px_rgba(38,35,49,.18)]">
+        <div className="mx-auto h-1.5 w-11 rounded-full bg-[#e8ddcd]" aria-hidden="true" />
+        <header className="mt-3 flex items-center justify-between gap-3">
+          <h2 id="sticker-edit-title" className="font-serif text-3xl font-bold tracking-tight">Edit sticker</h2>
+          <button type="button" onClick={() => onChange((current) => ({ ...current, scale: 1, rotation: 0 }))} className="min-h-11 rounded-full px-2 text-sm font-bold text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss active:scale-[.96]">Reset</button>
+        </header>
 
-      <section className="relative mt-6 grid aspect-[4/3] max-h-[310px] place-items-center overflow-hidden rounded-[30px] bg-[#b7a291]" aria-label="Sticker preview">
-        <div className="pointer-events-none absolute inset-5 rounded-[24px] border border-white/65" aria-hidden="true" />
-        <img src={image} alt={`Sticker preview of ${item.english}`} className={cn('relative h-44 w-44', usePhoto ? 'rounded-[22px] border-[3px] border-white object-cover shadow-[0_8px_20px_rgba(38,35,49,.18)]' : 'captured-sticker-cutout object-contain')} style={{ transform: `scale(${scale}) rotate(${rotation}deg)`, transition: 'transform 160ms ease-out' }} />
-      </section>
-      {item.kind === 'object' && item.photoCropImage && <button type="button" onClick={() => setUsePhoto((current) => !current)} className="mt-2 min-h-11 w-full rounded-full text-sm font-bold text-cinnamon underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-400">{usePhoto ? 'Use cutout instead' : 'Cutout looks wrong? Use photo crop'}</button>}
-
-      <section className="mt-5" aria-label="Sticker adjustments">
-        <div className="grid grid-cols-2 rounded-2xl bg-[#f6f6f6] p-1">
-          <button onClick={() => setTool('crop')} aria-pressed={tool === 'crop'} className={cn('flex min-h-11 items-center justify-center gap-2 rounded-xl text-sm font-bold transition-[background-color,color] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss active:scale-[.96]', tool === 'crop' ? 'bg-white text-ink shadow-[0_1px_3px_rgba(38,35,49,.08)]' : 'text-stone-500')}><Crop size={18} />Crop</button>
-          <button onClick={() => setTool('rotate')} aria-pressed={tool === 'rotate'} className={cn('flex min-h-11 items-center justify-center gap-2 rounded-xl text-sm font-bold transition-[background-color,color] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss active:scale-[.96]', tool === 'rotate' ? 'bg-white text-ink shadow-[0_1px_3px_rgba(38,35,49,.08)]' : 'text-stone-500')}><RotateCcw size={18} />Adjust</button>
+        <div className="mt-5 space-y-4">
+          <div>
+            <div className="flex items-center justify-between gap-3"><label htmlFor="sticker-size" className="text-base font-bold">Size</label><output htmlFor="sticker-size" className="text-base tabular-nums text-stone-600">{Math.round(adjustment.scale * 100)}%</output></div>
+            <input id="sticker-size" type="range" min="0.8" max="1.35" step="0.01" value={adjustment.scale} onChange={(event) => setValue('scale', Number(event.target.value))} className="sticker-adjust-range mt-2 w-full" style={{ '--range-progress': `${((adjustment.scale - 0.8) / 0.55) * 100}%` }} />
+          </div>
+          <div className="border-t border-[#eee5d9] pt-4">
+            <div className="flex items-center justify-between gap-3"><label htmlFor="sticker-tilt" className="text-base font-bold">Tilt</label><output htmlFor="sticker-tilt" className="text-base tabular-nums text-stone-600">{adjustment.rotation}°</output></div>
+            <input id="sticker-tilt" type="range" min="-12" max="12" step="1" value={adjustment.rotation} onChange={(event) => setValue('rotation', Number(event.target.value))} className="sticker-adjust-range mt-2 w-full" style={{ '--range-progress': `${((adjustment.rotation + 12) / 24) * 100}%` }} />
+          </div>
         </div>
-        <div className="mt-4 rounded-2xl border border-stone-200 bg-[#faf9f6] px-4 py-3">
-          <div className="flex items-center justify-between gap-3"><label htmlFor="sticker-adjustment" className="text-sm font-bold text-ink">{sliderConfig.label}</label><output htmlFor="sticker-adjustment" className="text-sm font-semibold tabular-nums text-stone-500">{sliderConfig.valueText}</output></div>
-          <input id="sticker-adjustment" type="range" min={sliderConfig.min} max={sliderConfig.max} step={sliderConfig.step} value={activeValue} onChange={(event) => sliderConfig.onChange(event.target.value)} className="mt-3 h-8 w-full accent-moss" />
-        </div>
+        {item.kind === 'object' && item.photoCropImage && <button type="button" onClick={() => setValue('usePhoto', !adjustment.usePhoto)} className="mt-3 min-h-11 w-full rounded-full text-sm font-bold text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss">{adjustment.usePhoto ? 'Use cutout instead' : 'Use photo crop instead'}</button>}
+        <Button type="button" onClick={onSave} className="mt-4 w-full" size="lg">Save edits</Button>
+        <button type="button" onClick={onClose} className="mt-2 min-h-11 w-full rounded-full text-sm font-bold text-stone-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss">Cancel</button>
       </section>
-
-      <Button onClick={() => onContinue({ scale, rotation, usePhoto })} className="mt-5 w-full" size="lg"><Check size={19} />Use this sticker</Button>
-      <button onClick={onRetake} className="mt-2 min-h-11 w-full rounded-full text-sm font-bold text-stone-500 transition-[color] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss active:scale-[.96]">Retake photo</button>
     </div>
   )
 }
 
-function ResultView({ language, item, captureMode, saved, storageError, autoPlayPronunciation, onRetake, onDone, onSave, onCaptureAnother, onViewCollection }) {
+function ResultView({ language, item, captureMode, storageError, autoPlayPronunciation, onRetake, onEdit, onSave }) {
   const [playing, setPlaying] = useState(false)
   const [speechStatus, setSpeechStatus] = useState('')
   const hasAutoPlayed = useRef(false)
+  const showIpa = useContext(ShowIpaContext)
   const isPhraseMode = captureMode === 'phrase'
   const target = item
-  const sourceEvidence = useFinnishEvidence(item, language)
   const playPronunciation = () => {
     if (!target) return
     setPlaying(true)
@@ -1876,58 +2105,40 @@ function ResultView({ language, item, captureMode, saved, storageError, autoPlay
   if (!target) return null
 
   return (
-    <div id="content" className="result-screen-enter min-h-full bg-[#fff9ef] px-5 pb-7 pt-5">
-      <header className="grid min-h-11 grid-cols-[44px_1fr_70px] items-center">
-        <button onClick={saved ? onDone : onRetake} aria-label={saved ? 'Finish and return home' : 'Retake photo'} className="grid h-11 w-11 place-items-center rounded-full bg-[#F6F6F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><ChevronLeft /></button>
-        <p className="text-center text-sm font-bold text-ink">Review capture</p>
-        <span className="justify-self-end rounded-full bg-[#F6F6F6] px-3 py-1.5 text-[11px] font-bold text-stone-500">{isPhraseMode ? 'Phrase' : 'Object'}</span>
+    <div id="content" className={cn('flex min-h-full flex-col bg-[#fff9ef] px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-5 text-ink', (isPhraseMode || typeof document.startViewTransition !== 'function') && 'result-screen-enter')}>
+      <header className="grid min-h-11 grid-cols-[44px_1fr_44px] items-center gap-2">
+        <button onClick={onRetake} aria-label="Retake photo" className="grid h-11 w-11 place-items-center rounded-full bg-black/[.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><ChevronLeft /></button>
+        <span className="justify-self-center whitespace-nowrap rounded-full bg-black/[.04] px-3 py-2 text-xs font-semibold text-stone-600"><ShieldCheck size={14} className="mr-1 inline align-[-2px]" aria-hidden="true" />Only your sticker is saved</span>
+        <span aria-hidden="true" />
       </header>
-      <section className={cn('relative mt-5 grid aspect-[4/3] max-h-[310px] place-items-center overflow-hidden rounded-[30px]', isPhraseMode ? item.tone : 'bg-[#b7a291]')} aria-label={isPhraseMode ? 'Captured phrase sticker' : 'Captured object sticker'}>
-        <div className="pointer-events-none absolute -right-8 -top-10 h-40 w-40 rounded-full bg-white/35 blur-3xl" />
-        <div className="animate-pop" style={target.stickerAdjustment ? { transform: `scale(${target.stickerAdjustment.scale}) rotate(${target.stickerAdjustment.rotation}deg)` } : undefined}>
-          {isPhraseMode ? <div className="sticker-cutout h-32 w-64 rotate-[-2deg] overflow-hidden rounded-[22px] border-[3px] border-white bg-white"><img src={item.stickerImage} alt="Captured phrase" className="h-full w-full object-cover" /></div> : <img src={item.stickerImage} alt={`Sticker of ${item.english}`} className={cn('h-44 w-44', item.cutoutIsTransparent ? 'captured-sticker-cutout object-contain' : 'rounded-[22px] border-[3px] border-white object-cover shadow-[0_8px_20px_rgba(38,35,49,.18)]')} />}
+
+      <section className="grid min-h-[220px] flex-1 place-items-center py-8" aria-label={isPhraseMode ? 'Captured phrase sticker' : 'Captured object sticker'}>
+        <div className={cn(isPhraseMode && 'animate-pop')} style={target.stickerAdjustment ? { transform: `scale(${target.stickerAdjustment.scale}) rotate(${target.stickerAdjustment.rotation}deg)` } : undefined}>
+          {isPhraseMode ? <div className="sticker-cutout h-36 w-[min(76vw,290px)] rotate-[-2deg] overflow-hidden rounded-[22px] border-[3px] border-white bg-white"><img src={item.stickerImage} alt="Captured phrase" className="h-full w-full object-cover" /></div> : <img src={item.stickerImage} alt={`Sticker of ${item.english}`} className={cn('capture-result-sticker h-[min(34dvh,250px)] w-[min(66vw,250px)]', item.cutoutIsTransparent ? 'captured-sticker-cutout object-contain' : 'rounded-[22px] border-[3px] border-white object-cover shadow-[0_8px_20px_rgba(38,35,49,.18)]')} />}
         </div>
-        <span className="absolute bottom-4 rounded-full bg-white/85 px-3 py-1.5 text-xs font-bold text-cinnamon backdrop-blur-sm"><Check size={14} className="mr-1 inline" />{saved ? 'Saved to your collection' : isPhraseMode ? 'Text found' : 'New sticker discovered'}</span>
       </section>
 
-      <section className="mt-5" aria-labelledby="capture-result-title">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-xs font-bold uppercase tracking-[.14em] text-moss">{isPhraseMode ? 'You captured' : target.english}</p>
-            <h1 id="capture-result-title" className="mt-1 text-balance font-serif text-[34px] font-bold leading-tight tracking-tight text-ink">{target.word}</h1>
-            <Ipa value={target.ipa} className="mt-1 block text-sm font-semibold text-moss" />
-            {isPhraseMode ? <p className="mt-3 text-base font-medium text-stone-600">{target.english}</p> : null}
+      <section className="text-center" aria-labelledby="capture-result-title">
+        <p className="text-xs font-bold uppercase tracking-[.14em] text-cinnamon">{language.name}</p>
+        <h1 id="capture-result-title" className={cn('mt-2 break-words font-serif font-bold leading-[1.05] tracking-tight', isPhraseMode ? 'text-[clamp(1.875rem,7vw,2.5rem)]' : 'text-[clamp(2.5rem,10vw,3.75rem)]')}>{target.word}</h1>
+        <div className="mt-3 flex items-center justify-center gap-2 text-stone-600">
+          <button onClick={playPronunciation} aria-label={`Play ${language.name} pronunciation`} className={cn('grid h-11 w-11 shrink-0 place-items-center rounded-full bg-black/[.04] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss active:scale-[.96]', playing ? 'text-coral' : 'text-cinnamon')}><Volume2 size={21} aria-hidden="true" /></button>
+          <div className={cn('min-w-0', isPhraseMode ? 'max-w-[16rem] text-left text-sm leading-5' : 'flex flex-wrap items-center gap-x-1 text-base')}>
+            <Ipa value={target.ipa} className="font-medium" />
+            <span className={isPhraseMode ? 'block' : ''}>{!isPhraseMode && showIpa && target.ipa ? '· ' : ''}{target.english}</span>
           </div>
-          <AudioButton onClick={playPronunciation} label={`Play ${language.name} pronunciation`} active={playing}><Volume2 size={27} /></AudioButton>
         </div>
         <p aria-live="polite" className="sr-only">{speechStatus}</p>
-        <button onClick={onRetake} className="mt-2 min-h-11 text-sm font-bold text-stone-500 underline decoration-stone-300 underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss">{isPhraseMode ? 'Text not correct? Retake' : 'Wrong object? Retake'}</button>
       </section>
 
-      <FinnishSourceNote evidence={sourceEvidence} form={target.form} />
-
-      <section className="mt-4 rounded-[24px] border border-stone-200 bg-[#faf9f6] p-4" aria-labelledby="capture-context-title">
-        <p id="capture-context-title" className="text-xs font-bold uppercase tracking-[.12em] text-cinnamon">{isPhraseMode ? 'What each part means' : 'Use it in a sentence'}</p>
-        <p className="mt-2 font-serif text-lg font-bold leading-6 text-ink">“{target.sentence}”</p>
-        <p className="mt-1 text-sm leading-5 text-stone-600">{target.sentenceTranslation}</p>
-        <details className="lesson-details mt-3 border-t border-black/[.07] pt-2"><summary>Understand this sentence <ChevronDown size={17} /></summary><SentenceParts parts={target.sentenceParts} language={language} />{!isPhraseMode && <WordFormNote item={target} />}</details>
-      </section>
-
-      {!saved ? (
-        <>
-          {storageError && <p role="alert" className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-800">{storageError}</p>}
-          <Button onClick={onSave} className="mt-5 w-full" size="lg"><Sparkles size={19} />{isPhraseMode ? 'Save to phrases' : 'Save to my collection'}</Button>
-        </>
-      ) : (
-        <section className="mt-7 border-t border-stone-200 pt-5" aria-live="polite">
-          <div className="capture-save-confirmation flex items-center gap-3">
-            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-moss/10 text-moss"><Check size={20} /></span>
-            <div><p className="font-bold text-ink">Saved to {isPhraseMode ? 'Phrases' : target.collection}</p><p className="mt-0.5 text-sm text-stone-500">It’s ready for your next review.</p></div>
-          </div>
-          <Button onClick={onCaptureAnother} className="mt-4 w-full" size="lg"><Camera size={19} />Capture another</Button>
-          <button onClick={onViewCollection} className="mt-2 min-h-11 w-full rounded-full text-sm font-bold text-ink transition-[color] hover:text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss active:scale-[.98]">View collection</button>
-        </section>
-      )}
+      <div className="mt-7">
+        {storageError && <p role="alert" className="mb-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-800">{storageError}</p>}
+        <Button onClick={onSave} className="w-full" size="lg">{isPhraseMode ? 'Add to my phrases' : 'Add to my words'}</Button>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button onClick={onEdit} className="flex min-h-11 items-center justify-center gap-2 rounded-full text-sm font-bold text-stone-600 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss active:text-ink"><Pencil size={17} aria-hidden="true" />Edit</button>
+          <button onClick={onRetake} className="flex min-h-11 items-center justify-center gap-2 rounded-full text-sm font-bold text-stone-600 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss active:text-ink"><RotateCcw size={17} aria-hidden="true" />Retake</button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -2747,7 +2958,7 @@ function ReviewView({ items, practiceItems = [], dueCount = 0, logAvailable, woo
       {items.length ? (
         <>
           <section className="relative mt-5 min-h-[214px] overflow-hidden rounded-[28px] bg-brand-soft p-5" aria-label="Sticker review">
-            <img src="/assets/reindeer-sauna.png" alt="" width="214" height="214" className="pointer-events-none absolute inset-y-0 right-0 h-full w-[52%] select-none object-cover object-center" />
+            <img src="/assets/reindeer-sauna.png" alt="" width="214" height="214" className="pointer-events-none absolute bottom-0 right-1 h-[76%] w-[38%] select-none object-contain object-bottom" />
             <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-brand-soft via-brand-soft/95 to-transparent" />
             <div className="relative z-10 flex min-h-[174px] w-[62%] flex-col items-start">
               <h2 className="text-balance text-[22px] font-semibold leading-[1.08] tracking-[-.03em] text-ink">{dueCount ? `${dueCount} ${dueCount === 1 ? 'word' : 'words'} due today` : 'All caught up today'}</h2>
