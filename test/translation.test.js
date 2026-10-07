@@ -32,7 +32,7 @@ test('rejects a translation response with no English text', async () => {
 test('capture repairs missing sentence and expression translations before returning', async (context) => {
   const originalFetch = globalThis.fetch
   const responses = [
-    { english: 'door', word: 'dörr', ipa: '/dœrː/', collection: 'Home', sentence: 'Dörren är öppen.', sentenceParts: [{ word: 'Dörren', meaning: 'the door' }], expression: { sentence: 'Öppna dörren.' } },
+    { english: 'door', word: 'dörr', ipa: '/dœrː/', collection: 'Home', sentence: 'Dörren är öppen.', sentenceParts: [{ word: 'Dörren', meaning: 'the door' }], expression: { sentence: 'Öppna dörren.', wordForm: 'dörren' } },
     { translation: 'The door is open.' },
     { translation: 'Open the door.' },
   ]
@@ -41,4 +41,5 @@ test('capture repairs missing sentence and expression translations before return
   const result = await analyzeWithDeepSeek({ image: 'data:image/png;base64,AA==', captureMode: 'object', targetLanguage: 'Swedish' }, 'test-key')
   assert.equal(result.sentenceTranslation, 'The door is open.')
   assert.equal(result.expression.translation, 'Open the door.')
+  assert.equal(result.expression.wordForm, 'dörren')
 })

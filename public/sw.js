@@ -1,5 +1,5 @@
-const CACHE_NAME = 'sanoa-shell-v1'
-const SHELL = ['/', '/manifest.webmanifest', '/assets/lingo-sauna-app-icon-v1.png']
+const CACHE_NAME = 'sanoa-shell-v2'
+const SHELL = ['/', '/manifest.webmanifest', '/assets/lingo-sauna-app-icon-v1.png', '/assets/lingo-sauna-app-icon-192.png']
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()))
