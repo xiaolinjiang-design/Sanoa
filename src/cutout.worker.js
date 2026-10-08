@@ -3,6 +3,7 @@ import { preload, removeBackground } from '@imgly/background-removal'
 const cutoutConfig = {
   model: 'isnet_quint8',
   device: 'cpu',
+  proxyToWorker: false,
   output: { format: 'image/png', quality: 1, type: 'foreground' },
 }
 

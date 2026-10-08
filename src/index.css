@@ -65,11 +65,17 @@
 }
 
 @media (display-mode: standalone) {
+  html,
+  body,
+  #root { width: 100%; height: 100%; min-height: 100%; }
   html { background: #fbf7ef; }
+  body { overflow: hidden; }
   #root { display: block; }
   .app-shell {
+    position: fixed;
+    inset: 0;
     width: 100%;
-    height: 100dvh;
+    height: 100vh;
     max-width: none;
     border-radius: 0;
     box-shadow: none;
@@ -111,7 +117,7 @@
     .onboarding-choice-copy { padding-top: 16px; }
   }
 
-  .home-canvas {
+.home-canvas {
     background:
       linear-gradient(
         180deg,
@@ -424,8 +430,22 @@
     transition: opacity 220ms cubic-bezier(.32, .72, 0, 1), transform 220ms cubic-bezier(.32, .72, 0, 1);
   }
 
-  .capture-lifting-photo { transition: filter 220ms cubic-bezier(.32, .72, 0, 1); }
-  .capture-lifting-dim { opacity: .24; }
+  .capture-lifting-photo { transition: opacity var(--sticker-trace-duration) ease-in-out; }
+  .capture-lifting-foreground { opacity: 0; transition: opacity 220ms ease-out; }
+  .capture-lifting[data-phase='trace'] .capture-lifting-photo,
+  .capture-lifting[data-phase='lift'] .capture-lifting-photo,
+  .capture-lifting[data-phase='land'] .capture-lifting-photo { opacity: 0; }
+  .capture-lifting[data-phase='trace'] .capture-lifting-foreground { opacity: 1; }
+  .capture-lifting[data-phase='trace'] .capture-lifting-dim,
+  .capture-lifting[data-phase='lift'] .capture-lifting-dim,
+  .capture-lifting[data-phase='land'] .capture-lifting-dim { opacity: 0; }
+  .capture-lifting-scene > .bg-gradient-to-t { transition: opacity var(--sticker-trace-duration) ease-in-out; }
+  .capture-lifting:not([data-phase='scan']):not([data-phase='error']) .capture-lifting-scene > .bg-gradient-to-t { opacity: 0; }
+  .capture-lifting:not([data-phase='scan']):not([data-phase='error']) .capture-lifting-status,
+  .capture-lifting:not([data-phase='scan']):not([data-phase='error']) .capture-lifting-status p,
+  .capture-lifting[data-phase='land'] .capture-lifting-word h1 { color: #262331; }
+  .capture-lifting:not([data-phase='scan']) .capture-step-label.capture-thinking { background: none; -webkit-text-fill-color: currentColor; }
+  .capture-lifting-dim { opacity: .92; }
   .capture-lifting[data-phase='scan'] .capture-lifting-dim { animation: capture-dim-in 240ms cubic-bezier(.32, .72, 0, 1) both; }
   .capture-lifting-scan { transition: opacity 180ms ease-in; }
   .capture-lifting:not([data-phase='scan']) .capture-lifting-scan { opacity: 0; }
@@ -434,7 +454,7 @@
   .capture-step-detail { animation: capture-step-scroll-up 240ms cubic-bezier(.32, .72, 0, 1) both; }
   .capture-step-label.capture-thinking {
     color: transparent;
-    background: linear-gradient(90deg, rgb(255 255 255 / .56) 0%, rgb(255 255 255 / .56) 32%, #fff 50%, rgb(255 255 255 / .56) 68%, rgb(255 255 255 / .56) 100%);
+    background: linear-gradient(90deg, rgb(255 255 255 / .78) 0%, rgb(255 255 255 / .78) 32%, #fff 50%, rgb(255 255 255 / .78) 68%, rgb(255 255 255 / .78) 100%);
     background-size: 400% 100%;
     background-position: 100% 0;
     background-clip: text;
@@ -442,7 +462,7 @@
     -webkit-text-fill-color: transparent;
     animation: capture-step-scroll-up 240ms cubic-bezier(.32, .72, 0, 1) both, capture-thinking-sweep 2.4s linear 240ms infinite;
   }
-  .capture-lifting-status { text-shadow: 0 1px 14px rgb(0 0 0 / .65); }
+  .capture-lifting-status { text-shadow: none; }
   .capture-lifting-cream,
   .capture-lifting-outline,
   .capture-lifting-sticker,
@@ -460,9 +480,11 @@
   .capture-lifting-word { transform: translateY(8px); }
 
   .capture-lifting[data-phase='trace'] .capture-lifting-outline { opacity: 1; }
+  .capture-lifting-outline-path { stroke-dasharray: 1; stroke-dashoffset: 1; }
+  .capture-lifting[data-phase='trace'] .capture-lifting-outline-path { animation: capture-outline-grow var(--sticker-trace-duration) linear both; }
+  .capture-lifting[data-phase='lift'] .capture-lifting-outline-path { stroke-dashoffset: 0; }
   .capture-lifting[data-phase='lift'] .capture-lifting-outline { opacity: .38; }
-  .capture-lifting[data-phase='lift'] .capture-lifting-photo { filter: blur(5px); }
-  .capture-lifting[data-phase='lift'] .capture-lifting-dim { opacity: .6; }
+
   .capture-lifting[data-phase='lift'] .capture-lifting-sticker { opacity: 1; transform: translate(-50%, -57%) scale(1.12); }
   .capture-lifting[data-phase='land'] .capture-lifting-sticker,
   .capture-lifting[data-phase='land'] .capture-lifting-word { opacity: 1; }
@@ -635,7 +657,11 @@
 
 @keyframes capture-dim-in {
   from { opacity: 0; }
-  to { opacity: .35; }
+  to { opacity: .92; }
+}
+
+@keyframes capture-outline-grow {
+  to { stroke-dashoffset: 0; }
 }
 
 @keyframes capture-scan-sweep {
@@ -752,6 +778,7 @@
   .capture-processing-photo, .capture-cutout-image, .capture-cutout-glow, .result-screen-enter, .capture-result-content-rise, .capture-save-confirmation { animation: none !important; }
   .capture-lifting-sparkle, .capture-word-shimmer::after, .capture-word-reveal, .capture-step-label.capture-thinking { animation: none !important; }
   .capture-step-label.capture-thinking { color: white; background: none; -webkit-text-fill-color: currentColor; }
+  .capture-lifting-outline-path { animation: none !important; stroke-dashoffset: 0; }
   .capture-lifting-scan-line, .capture-lifting-dim { animation: none !important; }
   ::view-transition-group(captured-sticker), ::view-transition-old(captured-sticker), ::view-transition-new(captured-sticker), ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .01ms !important; }
   ::view-transition-group(root) { animation: none !important; }

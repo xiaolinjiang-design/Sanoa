@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
+import { playAnswerSound } from './answerSounds'
 import { ArrowUpRight, BookOpen, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Coffee, DoorOpen, Droplet, Eye, Flame, Footprints, HelpCircle, Home, KeyRound, Languages, Mail, MessageSquareText, Pencil, RotateCcw, ShieldCheck, Sparkles, Trash2, UserRound, Volume2, X } from 'lucide-react'
 import { dailyVerbNotes } from './dailyVerbNotes'
 import { resolveDailyVerbPhrases } from './dailyVerbLesson'
@@ -9,6 +10,10 @@ import { Button } from './components/ui/button'
 import { Card } from './components/ui/card'
 import { Chip } from './components/ui/chip'
 import { cn } from './lib/utils'
+
+const STICKER_TRACE_MS = 900
+const STICKER_LIFT_MS = 240
+const STICKER_SETTLE_MS = 220
 
 const languages = {
   fi: { name: 'Finnish', localName: 'suomi', flag: '🇫🇮', locale: 'fi-FI', greeting: 'Moi!', accent: 'bg-brand-soft' },
@@ -665,7 +670,6 @@ function localDateKey(date) {
 function useStickerGravity() {
   const [gravity, setGravity] = useState({ x: 0, y: 0 })
   const initialOrientation = useRef(null)
-  const [tiltPermission, setTiltPermission] = useState(() => navigator.maxTouchPoints > 0 && window.DeviceOrientationEvent?.requestPermission ? 'ask' : 'automatic')
 
   useEffect(() => {
     if (!window.DeviceOrientationEvent) return undefined
@@ -683,17 +687,6 @@ function useStickerGravity() {
     return () => window.removeEventListener('deviceorientation', handleOrientation)
   }, [])
 
-  const requestTiltPermission = async () => {
-    if (!window.DeviceOrientationEvent?.requestPermission) return
-    try {
-      const result = await window.DeviceOrientationEvent.requestPermission()
-      setTiltPermission(result === 'granted' ? 'granted' : 'denied')
-      if (result === 'granted') initialOrientation.current = null
-    } catch {
-      setTiltPermission('denied')
-    }
-  }
-
   const bindGravity = {
     onPointerMove: (event) => {
       if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
@@ -706,7 +699,7 @@ function useStickerGravity() {
     onPointerLeave: (event) => { if (event.pointerType === 'mouse') setGravity({ x: 0, y: 0 }) },
   }
 
-  return { gravity, bindGravity, requestTiltPermission, tiltPermission }
+  return { gravity, bindGravity }
 }
 
 function SentenceParts({ parts, language }) {
@@ -740,8 +733,9 @@ function App() {
   const [captureWord, setCaptureWord] = useState(null)
 
   useEffect(() => {
-    if (step !== 'camera' || captureMode !== 'object') return
-    warmCutoutModel().catch(() => {})
+    if (captureMode !== 'object' || !['home', 'camera'].includes(step)) return
+    const timer = window.setTimeout(() => warmCutoutModel().catch(() => {}), step === 'camera' ? 0 : 600)
+    return () => window.clearTimeout(timer)
   }, [step, captureMode])
 
   const [captureError, setCaptureError] = useState('')
@@ -932,16 +926,24 @@ function App() {
     setCaptureStage(0)
     setStep('analyzing')
 
+    const captureStartedAt = performance.now()
+    const timings = {}
+    const captureController = new AbortController()
+    const recordTiming = (phase) => { timings[phase] = Math.round(performance.now() - captureStartedAt) }
     try {
       let cutoutReadyAt = 0
+      let cutoutAnimationMs = 0
       const earlyCutout = captureMode === 'object'
-        ? prepareEarlyCutout(image).then((assets) => {
+        ? prepareEarlyCutout(image, { signal: captureController.signal }).then((assets) => {
+          captureController.signal.throwIfAborted()
+          recordTiming('cutoutReadyMs')
           cutoutReadyAt = Date.now()
+          cutoutAnimationMs = (assets.outlinePath ? STICKER_TRACE_MS : 0) + STICKER_LIFT_MS + STICKER_SETTLE_MS
           setCaptureCutout(assets)
           setCaptureStage(1)
           return assets
         }).catch((error) => {
-          console.error('Early foreground segmentation failed.', error)
+          if (!captureController.signal.aborted) console.error('Early foreground segmentation failed.', error)
           return null
         })
         : null
@@ -953,6 +955,17 @@ function App() {
       const response = await analysisRequest
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error || 'Could not analyze this photo.')
+      recordTiming('recognitionReadyMs')
+      if (payload.result?.blocked) {
+        captureController.abort()
+        cancelCutoutJobs()
+        setCaptureCutout(null)
+        setCaptureWord(null)
+        setCaptureResult(null)
+        setCapturedImage('')
+        setCaptureError('A human face was detected. Processing stopped. Please retake the photo with faces out of frame.')
+        return
+      }
       setCaptureWord(payload.result)
       if (captureMode === 'phrase') setCaptureStage(1)
       let stickerImage = ''
@@ -961,27 +974,23 @@ function App() {
       if (captureMode === 'object') {
         const assets = await earlyCutout
         if (assets) {
-          const [sticker, photo] = await Promise.all([
-            cropPhotoToBox(assets.foregroundImage, payload.result.boundingBox).then((crop) => resizeStickerImage(crop)),
-            cropPhotoToBox(image, payload.result.boundingBox).then((crop) => resizeStickerImage(crop, 640)),
-          ])
-          stickerImage = sticker
-          photoCropImage = photo
+          stickerImage = assets.stickerImage
+          photoCropImage = await cropPhotoToBox(image, assets.foregroundBox).then((crop) => resizeStickerImage(crop, 640))
           cutoutIsTransparent = true
         } else {
           try {
-            const focusedImage = await cropPhotoToBox(image, payload.result.boundingBox)
-            const fallbackAssets = await prepareEarlyCutout(focusedImage)
+            const fallbackAssets = await prepareEarlyCutout(image, { cpuOnly: true })
             stickerImage = fallbackAssets.stickerImage
+            photoCropImage = await cropPhotoToBox(image, fallbackAssets.foregroundBox).then((crop) => resizeStickerImage(crop, 640))
             cutoutIsTransparent = true
             cutoutReadyAt = Date.now()
-            setCaptureCutout({ ...fallbackAssets, outlineImage: null })
+            cutoutAnimationMs = STICKER_LIFT_MS + STICKER_SETTLE_MS
+            setCaptureCutout({ ...fallbackAssets, outlinePath: null, foregroundImage: null })
           } catch (cutoutError) {
             console.error('Foreground segmentation failed.', cutoutError)
             throw new Error('We found the object, but could not finish its sticker. Try processing it again.')
           }
         }
-        if (!assets) photoCropImage = await resizeStickerImage(await cropPhotoToBox(image, payload.result.boundingBox), 640)
       } else {
         stickerImage = await resizeStickerImage(await cropPhotoToBox(image, payload.result.boundingBox), 640)
       }
@@ -998,8 +1007,10 @@ function App() {
       })
       setCaptureStage(2)
       const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      const hold = reducedMotion ? 0 : Math.max(120, 540 - (Date.now() - cutoutReadyAt))
+      const hold = reducedMotion ? 0 : Math.max(0, cutoutAnimationMs - (Date.now() - cutoutReadyAt))
       await new Promise((resolve) => window.setTimeout(resolve, hold))
+      recordTiming('resultReadyMs')
+      console.info('[capture timing] ' + JSON.stringify({ mode: captureMode, ...timings }))
       if (captureMode === 'object' && !reducedMotion && typeof document.startViewTransition === 'function') {
         document.startViewTransition(() => flushSync(() => setStep('result')))
       } else {
@@ -1219,7 +1230,7 @@ function App() {
     <ShowIpaContext.Provider value={profileSettings.showIpa}>
     <main className="app-shell relative mx-auto h-[100dvh] w-full overflow-hidden bg-white sm:h-[min(852px,100dvh)] sm:w-[393px] sm:rounded-[36px] sm:shadow-[0_28px_80px_rgba(0,0,0,.48)]">
       <a href="#content" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-white focus:px-3 focus:py-2">Skip to content</a>
-      <div ref={scrollViewportRef} className={cn('app-scroll h-full overflow-y-auto overscroll-contain', targetLanguage && !needsLearningGoal && !['home', 'camera', 'analyzing'].includes(step) && 'safe-area-content', showBottomNav && 'pb-[calc(8rem+env(safe-area-inset-bottom))]')}>
+      <div ref={scrollViewportRef} className={cn('app-scroll isolate h-full overflow-y-auto overscroll-contain', targetLanguage && !needsLearningGoal && !['home', 'camera', 'analyzing'].includes(step) && 'safe-area-content', showBottomNav && 'pb-[calc(10rem+env(safe-area-inset-bottom))]')}>
         {!targetLanguage ? (
           <LanguageChoice onSelect={selectLanguage} />
         ) : needsLearningGoal ? (
@@ -1236,9 +1247,9 @@ function App() {
         ) : step === 'review' ? (
           <ReviewView items={reviewItems} practiceItems={practiceItems} dueCount={dueReviewItems.length} logAvailable={!dailyFika.tasks.includes('recall') && (dailyFika.woodCount || 0) < 3} woodFull={(dailyFika.woodCount || 0) >= 3} onCapture={() => openCamera('object')} onStartQuiz={startQuiz} onOpenCollection={openCollection} />
         ) : step === 'quiz' ? (
-          <QuizView language={languages[targetLanguage]} question={quizQuestion} finished={quizFinished} logsEarned={quizLogsEarned} woodFull={(dailyFika.woodCount || 0) >= 3} sessionCount={quizSessionWords.length} completedCount={quizCompletedWords.length} onBack={() => setStep('review')} onNext={nextQuizQuestion} onMistake={(item) => { setQuizMistakes((count) => count + 1); handleReviewMistake(item) }} onCorrect={handleReviewCorrect} />
+          <QuizView onAnswer={(correct) => profileSettings.soundEffects !== false && playAnswerSound(correct)} language={languages[targetLanguage]} question={quizQuestion} finished={quizFinished} logsEarned={quizLogsEarned} woodFull={(dailyFika.woodCount || 0) >= 3} sessionCount={quizSessionWords.length} completedCount={quizCompletedWords.length} onBack={() => setStep('review')} onNext={nextQuizQuestion} onMistake={(item) => { setQuizMistakes((count) => count + 1); handleReviewMistake(item) }} onCorrect={handleReviewCorrect} />
         ) : step === 'matching' ? (
-          <MatchingView items={[...reviewItems, ...earlierReviewSeeds[targetLanguage]]} language={languages[targetLanguage]} rewardAvailable={matchingRewardAvailable} onBack={() => setStep('home')} onMistake={handleReviewMistake} onCorrect={handleReviewCorrect} onComplete={(score) => matchingRewardAvailable && awardSaunaWood(score >= 15 ? 3 : score >= 10 ? 2 : score >= 5 ? 1 : 0, 'matching')} />
+          <MatchingView onAnswer={(correct) => profileSettings.soundEffects !== false && playAnswerSound(correct)} items={[...reviewItems, ...earlierReviewSeeds[targetLanguage]]} language={languages[targetLanguage]} rewardAvailable={matchingRewardAvailable} onBack={() => setStep('home')} onMistake={handleReviewMistake} onCorrect={handleReviewCorrect} onComplete={(score) => matchingRewardAvailable && awardSaunaWood(score >= 15 ? 3 : score >= 10 ? 2 : score >= 5 ? 1 : 0, 'matching')} />
         ) : step === 'profile' ? (
           <ProfileView languageKey={targetLanguage} language={languages[targetLanguage]} reviewItems={reviewItems} dailyVerbs={dailyVerbs} savedDailyWords={savedDailyWords} settings={profileSettings} profile={profile} learningGoal={learningGoalsByLanguage[targetLanguage]} onLearningGoalChange={(goal) => setLearningGoalsByLanguage((current) => ({ ...current, [targetLanguage]: goal }))} onSettingsChange={setProfileSettings} onSelectLanguage={selectLanguage} onOpenReview={() => setStep('review')} onEditProfile={() => setProfileEditorOpen(true)} onOpenFeedback={() => setFeedbackOpen(true)} onOpenPrivacy={() => setPrivacyOpen(true)} />
         ) : step === 'collection' ? (
@@ -1591,7 +1602,7 @@ function HomeView({ language, reviewItems, dailyVerbs, savedDailyWords, dailyGoa
   )
 }
 
-function compressPhoto(file) {
+function compressPhoto(file, captureMode) {
   return new Promise((resolve, reject) => {
     if (!file.type.startsWith('image/')) {
       reject(new Error('Please choose an image file.'))
@@ -1604,7 +1615,7 @@ function compressPhoto(file) {
       const image = new Image()
       image.onerror = () => reject(new Error('Could not open this photo.'))
       image.onload = () => {
-        const maxSide = 1600
+        const maxSide = captureMode === 'object' ? 960 : 1600
         const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight))
         const canvas = document.createElement('canvas')
         canvas.width = Math.round(image.naturalWidth * scale)
@@ -1674,6 +1685,14 @@ function ensureCutoutWorker() {
   return cutoutWorker
 }
 
+function cancelCutoutJobs() {
+  cutoutWorker?.terminate()
+  cutoutWorker = null
+  cutoutPreloadPromise = null
+  for (const job of cutoutJobs.values()) job.reject(new DOMException('Capture stopped.', 'AbortError'))
+  cutoutJobs.clear()
+}
+
 function sendCutoutWorkerJob(type, source) {
   return new Promise((resolve, reject) => {
     try {
@@ -1702,16 +1721,15 @@ async function removeBackgroundOffThread(source) {
   return sendCutoutWorkerJob('remove', source)
 }
 
-async function prepareEarlyCutout(source) {
+async function prepareEarlyCutout(source, { cpuOnly = false, signal } = {}) {
   const scaledPhoto = await resizeStickerImage(source, 640)
-  const foreground = await removeBackgroundOffThread(scaledPhoto).catch(async () => {
-    const { removeBackground } = await import('@imgly/background-removal')
-    return removeBackground(scaledPhoto, {
-      model: 'isnet_quint8',
-      device: 'cpu',
-      output: { format: 'image/png', quality: 1, type: 'foreground' },
-    })
-  })
+  signal?.throwIfAborted()
+  const removeOnCpu = () => {
+    signal?.throwIfAborted()
+    return sendCutoutWorkerJob('remove-cpu', scaledPhoto)
+  }
+  const foreground = cpuOnly ? await removeOnCpu() : await removeBackgroundOffThread(scaledPhoto).catch(removeOnCpu)
+  signal?.throwIfAborted()
   const foregroundUrl = await blobToDataUrl(foreground)
   const image = await new Promise((resolve, reject) => {
     const loaded = new Image()
@@ -1752,20 +1770,11 @@ async function prepareEarlyCutout(source) {
   }
   if (foregroundPixels < width * height * .002 || !edges.length) throw new Error('No usable object cutout was found.')
 
-  const outline = document.createElement('canvas')
-  outline.width = width
-  outline.height = height
-  const outlineContext = outline.getContext('2d')
-  outlineContext.strokeStyle = 'rgba(255,255,255,.96)'
-  outlineContext.lineWidth = Math.max(2, width / 260)
-  outlineContext.lineCap = 'round'
-  outlineContext.lineJoin = 'round'
-  outlineContext.setLineDash([8, 7])
-  outlineContext.beginPath()
-  edges.forEach(([first, , y], index) => index ? outlineContext.lineTo(first, y) : outlineContext.moveTo(first, y))
-  for (let index = edges.length - 1; index >= 0; index -= 1) outlineContext.lineTo(edges[index][1], edges[index][2])
-  outlineContext.closePath()
-  outlineContext.stroke()
+  const outlinePoints = [
+    ...edges.map(([first, , y]) => [first, y]),
+    ...edges.slice().reverse().map(([, last, y]) => [last, y]),
+  ]
+  const outlinePath = `${outlinePoints.map(([x, y], index) => `${index ? 'L' : 'M'}${x} ${y}`).join(' ')} Z`
 
   const pad = Math.max(12, Math.round(Math.max(right - left, bottom - top) * .08))
   const cropX = Math.max(0, left - pad)
@@ -1777,7 +1786,7 @@ async function prepareEarlyCutout(source) {
   sticker.width = Math.max(1, Math.round(cropWidth * scale))
   sticker.height = Math.max(1, Math.round(cropHeight * scale))
   sticker.getContext('2d').drawImage(canvas, cropX, cropY, cropWidth, cropHeight, 0, 0, sticker.width, sticker.height)
-  return { stickerImage: sticker.toDataURL('image/png'), foregroundImage: foregroundUrl, outlineImage: outline.toDataURL('image/png') }
+  return { stickerImage: sticker.toDataURL('image/png'), foregroundImage: foregroundUrl, foregroundBox: { x: left / width * 100, y: top / height * 100, width: (right - left + 1) / width * 100, height: (bottom - top + 1) / height * 100 }, outlinePath, outlineViewBox: `0 0 ${width} ${height}` }
 }
 
 function cropPhotoToBox(source, boundingBox) {
@@ -1856,7 +1865,7 @@ function CameraView({ language, captureMode, onCaptureModeChange, onBack, onReco
       fileInputRef.current?.click()
       return
     }
-    const maxSide = 1600
+    const maxSide = captureMode === 'object' ? 960 : 1600
     const scale = Math.min(1, maxSide / Math.max(video.videoWidth, video.videoHeight))
     const canvas = document.createElement('canvas')
     canvas.width = Math.round(video.videoWidth * scale)
@@ -1872,7 +1881,7 @@ function CameraView({ language, captureMode, onCaptureModeChange, onBack, onReco
     primeSpeech(language.locale)
     setPhotoError('')
     try {
-      onRecognize(await compressPhoto(file))
+      onRecognize(await compressPhoto(file, captureMode))
     } catch (error) {
       setPhotoError(error.message)
     }
@@ -1966,9 +1975,10 @@ function ObjectLiftingView({ image, cutout, word, stage, language, error, onRetr
       setPhase('land')
       return undefined
     }
-    setPhase(cutout.outlineImage ? 'trace' : 'lift')
-    const liftTimer = window.setTimeout(() => setPhase('lift'), cutout.outlineImage ? 180 : 0)
-    const landTimer = window.setTimeout(() => setPhase('land'), cutout.outlineImage ? 440 : 260)
+    setPhase(cutout.outlinePath ? 'trace' : 'lift')
+    const hasOutline = Boolean(cutout.outlinePath)
+    const liftTimer = window.setTimeout(() => setPhase('lift'), hasOutline ? STICKER_TRACE_MS : 0)
+    const landTimer = window.setTimeout(() => setPhase('land'), (hasOutline ? STICKER_TRACE_MS : 0) + STICKER_LIFT_MS)
     return () => {
       window.clearTimeout(liftTimer)
       window.clearTimeout(landTimer)
@@ -1976,10 +1986,10 @@ function ObjectLiftingView({ image, cutout, word, stage, language, error, onRetr
   }, [cutout])
 
   return (
-    <div id="content" ref={liftingRef} className="capture-lifting relative isolate min-h-full overflow-hidden bg-[#fff9ef] text-center" data-phase={error ? 'error' : phase}>
+    <div id="content" ref={liftingRef} className="capture-lifting relative isolate min-h-full overflow-hidden bg-[#fff9ef] text-center" data-phase={error ? 'error' : phase} style={{ '--sticker-trace-duration': `${STICKER_TRACE_MS}ms` }}>
       <div className="capture-lifting-scene absolute inset-0">
         {image && <img src={image} alt="Your captured photo" className="capture-lifting-photo h-full w-full object-cover" />}
-        <div className="capture-lifting-dim absolute inset-0 bg-ink/45" aria-hidden="true" />
+        <div className="capture-lifting-dim absolute inset-0 bg-ink/65" aria-hidden="true" />
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[42%] bg-gradient-to-t from-ink/55 via-ink/15 to-transparent" aria-hidden="true" />
         {!error && <div className="capture-lifting-scan pointer-events-none absolute inset-x-[17%] top-[30%] bottom-[34%]" aria-hidden="true">
           <span className="capture-lifting-scan-line absolute inset-x-4 top-1/2 h-px bg-white/70" />
@@ -1988,7 +1998,8 @@ function ObjectLiftingView({ image, cutout, word, stage, language, error, onRetr
           <span className="absolute bottom-0 left-0 h-8 w-8 rounded-bl-xl border-b-[3px] border-l-[3px] border-white/85" />
           <span className="absolute bottom-0 right-0 h-8 w-8 rounded-br-xl border-b-[3px] border-r-[3px] border-white/85" />
         </div>}
-        {cutout?.outlineImage && !error && <img src={cutout.outlineImage} alt="" className="capture-lifting-outline pointer-events-none absolute inset-0 h-full w-full object-cover" aria-hidden="true" />}
+        {cutout?.foregroundImage && !error && <img src={cutout.foregroundImage} alt="" className="capture-lifting-foreground pointer-events-none absolute inset-0 h-full w-full object-cover" aria-hidden="true" />}
+        {cutout?.outlinePath && !error && <svg viewBox={cutout.outlineViewBox} preserveAspectRatio="xMidYMid slice" className="capture-lifting-outline pointer-events-none absolute inset-0 h-full w-full" aria-hidden="true"><path d={cutout.outlinePath} pathLength="1" fill="none" stroke="white" strokeWidth="4" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" className="capture-lifting-outline-path" /></svg>}
       </div>
       <div className="capture-lifting-cream pointer-events-none absolute inset-0 bg-[#fff9ef]" aria-hidden="true" />
 
@@ -2011,8 +2022,8 @@ function ObjectLiftingView({ image, cutout, word, stage, language, error, onRetr
             <h1 className="capture-word-reveal mt-1 break-words font-serif text-[clamp(2.25rem,9vw,3rem)] font-bold leading-none text-white">{word.word}</h1>
             <p className="mt-1.5 text-sm text-white/85">{word.english}</p>
           </div> : <>
-            <p key={activeStep} className={cn('capture-step-label min-h-6 text-base font-bold leading-5', !finished && 'capture-thinking')}>{stepLabels[activeStep]}{finished ? '' : '…'}</p>
-            <p key={`detail-${activeStep}`} className={cn('capture-step-detail mt-1.5 min-h-10 text-xs leading-5', phase === 'land' ? 'text-stone-600' : 'text-white/85')}>{status}</p>
+            <p key={activeStep} className={cn('capture-step-label min-h-8 font-serif text-[clamp(1.25rem,5vw,1.4rem)] font-bold leading-tight', !finished && 'capture-thinking')}>{stepLabels[activeStep]}{finished ? '' : '…'}</p>
+            <p key={`detail-${activeStep}`} className={cn('capture-step-detail mt-2 min-h-10 text-sm leading-5', phase === 'land' ? 'text-stone-600' : 'text-white/90')}>{status}</p>
           </>}
         </section>
       </>}
@@ -2489,7 +2500,7 @@ function DeleteStickerDialog({ item, onDelete, onClose }) {
   )
 }
 
-function QuizView({ language, question, finished, logsEarned, woodFull, sessionCount, completedCount, onBack, onNext, onMistake, onCorrect }) {
+function QuizView({ onAnswer, language, question, finished, logsEarned, woodFull, sessionCount, completedCount, onBack, onNext, onMistake, onCorrect }) {
   const [selectedWord, setSelectedWord] = useState(null)
   const [showWrittenWord, setShowWrittenWord] = useState(false)
   const isListeningRound = completedCount % 2 === 1 && 'speechSynthesis' in window
@@ -2522,6 +2533,7 @@ function QuizView({ language, question, finished, logsEarned, woodFull, sessionC
   const showWord = !isListeningRound || showWrittenWord || isCorrect
   const chooseSticker = (item) => {
     if (isCorrect) return
+    onAnswer(item.word === question.answer.word)
     setSelectedWord(item.word)
     if (item.word !== question.answer.word) {
       onMistake(question.answer)
@@ -2575,7 +2587,7 @@ function createMatchingRound(items, excludedWords = []) {
   return { left: shuffle(pool), right: shuffle(pool) }
 }
 
-function MatchingView({ items, language, rewardAvailable, onBack, onMistake, onCorrect, onComplete }) {
+function MatchingView({ onAnswer, items, language, rewardAvailable, onBack, onMistake, onCorrect, onComplete }) {
   const duration = 30
   const scoreRef = useRef(0)
   const finishedRef = useRef(false)
@@ -2609,6 +2621,7 @@ function MatchingView({ items, language, rewardAvailable, onBack, onMistake, onC
 
   const evaluatePair = (leftWord, rightWord) => {
     if (!leftWord || !rightWord || wrongPair || correctPair || gameOver) return
+    onAnswer(leftWord === rightWord)
     if (leftWord === rightWord) {
       onCorrect(items.find((item) => item.word === leftWord))
       setCorrectPair(leftWord)
@@ -2852,6 +2865,7 @@ function ProfileView({ languageKey, language, reviewItems, dailyVerbs, savedDail
         <div className="divide-y divide-black/[.06] overflow-hidden rounded-[24px] border border-black/[.06] bg-white">
           <div className="flex min-h-[76px] items-center justify-between gap-4 px-4 py-3">
             <div className="flex min-w-0 items-center gap-3"><Volume2 size={20} className="shrink-0 text-moss" /><div><p className="font-bold text-ink">Auto-play pronunciation</p><p className="mt-1 text-sm text-stone-500">Hear words when a learning card opens.</p></div></div>
+            <SettingToggle checked={settings.soundEffects !== false} onChange={(value) => updateSetting('soundEffects', value)} label="Answer sounds" />
             <SettingToggle checked={settings.autoplay} onChange={(value) => updateSetting('autoplay', value)} label="Auto-play pronunciation" />
           </div>
           <div className="flex min-h-[76px] items-center justify-between gap-4 px-4 py-3">
@@ -3035,7 +3049,7 @@ function CollectionDetailView({ languageKey, collection, onBack, onOpenWord }) {
 }
 
 function ReviewView({ items, practiceItems = [], dueCount = 0, logAvailable, woodFull, onCapture, onStartQuiz, onOpenCollection }) {
-  const { gravity, bindGravity, requestTiltPermission, tiltPermission } = useStickerGravity()
+  const { gravity, bindGravity } = useStickerGravity()
   const collections = [
     ...(practiceItems.length ? [{ name: 'Needs practice', items: practiceItems }] : []),
     ...getWordCollections(items),
@@ -3046,7 +3060,6 @@ function ReviewView({ items, practiceItems = [], dueCount = 0, logAvailable, woo
     <div id="content" className="px-5 pb-4 pt-6">
       <header className="flex min-h-11 items-center justify-between gap-4">
         <h1 className="text-[28px] font-semibold leading-none tracking-[-.04em] text-ink">Review</h1>
-        {tiltPermission === 'ask' && <button type="button" onClick={requestTiltPermission} className="min-h-11 rounded-full px-3 text-xs font-bold text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-400">Enable phone tilt</button>}
       </header>
 
       {items.length ? (

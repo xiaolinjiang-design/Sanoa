@@ -42,10 +42,11 @@ export async function analyzeWithDeepSeek({ image, captureMode, targetLanguage }
   if (!['Finnish', 'Swedish'].includes(targetLanguage)) throw new Error('Unsupported target language.')
 
   const task = captureMode === 'object'
-    ? `Identify the single most prominent everyday object. Give its common English name and teach its common ${targetLanguage} name.`
+    ? `Identify the single most prominent foreground subject, including a body part when that is what the person is showing. If an open or raised hand fills the frame, identify the hand, even if it wears a ring, watch, or bracelet. Choose jewelry only when it is clearly the main close-up subject. Give its common English name and teach its common ${targetLanguage} name.`
     : `Read the most prominent short phrase or sign. If it is already ${targetLanguage}, preserve its wording; otherwise translate it naturally into ${targetLanguage}. Give its English meaning.`
 
-  const prompt = `${task}
+  const prompt = `First check the entire image for a visible real human face (including partial faces and faces in photos). If present, stop and return only {"blocked":true,"reason":"human_face"}. Do not identify the person or produce a lesson. A hand without a face is allowed. Otherwise complete this task:
+${task}
 Return only one valid JSON object with this exact shape:
 {
   "english": "short English meaning",
@@ -66,7 +67,7 @@ Return only one valid JSON object with this exact shape:
 }
 Use accurate IPA. Break down every meaningful word or phrase of the example sentence in reading order. Never include punctuation as a sentenceParts entry. Do not invent text that is not visible when reading a phrase.
 The collection name must always be concise English, even when the target language is Finnish or Swedish. For an object, "word" must always be the common dictionary/base singular noun shown on the sticker—never a changed form from the example sentence. Set "form" to the exact changed form of that noun that appears in the example sentence. Explain both the spelling/stem/ending change and the sentence role in plain English, so a learner can understand why the captured word looks different in context. For example, Finnish "lasi" → "lasin": add -n; it marks the glass as the object being lifted. Keep form fields empty only when the base form itself appears in the sentence or the item is a phrase. In "expression.wordForm", give the exact form of the captured word that appears in the expression; never use a verb or another word there. Each example must naturally use the captured word. Return useful sentence parts so the app can build chunks for every captured object.
-For an object, boundingBox must tightly surround only the identified object—not a hand holding it or nearby furniture. Values are percentages of the full image from 0 to 100. For a phrase, bound the visible sign or text region.`
+For an object, boundingBox must surround the entire identified subject. When the subject is a hand, include its palm and all visible fingers; do not select only its jewelry. When a hand merely holds a separate prominent object, bound that object. Values are percentages of the full image from 0 to 100. For a phrase, bound the visible sign or text region.`
 
   const response = await fetch('https://api.deepseek.com/chat/completions', {
     method: 'POST',
@@ -76,6 +77,7 @@ For an object, boundingBox must tightly surround only the identified object—no
     },
     body: JSON.stringify({
       model: 'deepseek-flash',
+      thinking: { type: 'disabled' },
       temperature: 0.2,
       response_format: { type: 'json_object' },
       messages: [{
@@ -93,12 +95,21 @@ For an object, boundingBox must tightly surround only the identified object—no
   const content = payload?.choices?.[0]?.message?.content
   if (!content) throw new Error('DeepSeek returned no analysis.')
   const result = cleanJson(content)
+  if (result?.blocked === true) {
+    return { blocked: true, reason: 'human_face' }
+  }
+  const repairs = []
   if ((typeof result?.sentenceTranslation !== 'string' || !result.sentenceTranslation.trim()) && typeof result?.sentence === 'string' && result.sentence.trim()) {
-    result.sentenceTranslation = await translateSentenceWithDeepSeek({ sentence: result.sentence, targetLanguage }, apiKey)
+    repairs.push(translateSentenceWithDeepSeek({ sentence: result.sentence, targetLanguage }, apiKey).then((translation) => {
+      result.sentenceTranslation = translation
+    }))
   }
   if (typeof result?.expression?.sentence === 'string' && result.expression.sentence.trim() && (typeof result.expression.translation !== 'string' || !result.expression.translation.trim())) {
-    result.expression.translation = await translateSentenceWithDeepSeek({ sentence: result.expression.sentence, targetLanguage }, apiKey)
+    repairs.push(translateSentenceWithDeepSeek({ sentence: result.expression.sentence, targetLanguage }, apiKey).then((translation) => {
+      result.expression.translation = translation
+    }))
   }
+  await Promise.all(repairs)
   validateResult(result)
   if (targetLanguage === 'Finnish' && captureMode === 'object') {
     result.sourceEvidence = getFinnishSourceEvidence(result.word, result.form)

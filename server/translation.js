@@ -12,6 +12,7 @@ export async function translateSentenceWithDeepSeek({ sentence, targetLanguage }
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'deepseek-flash',
+      thinking: { type: 'disabled' },
       temperature: 0,
       response_format: { type: 'json_object' },
       messages: [
