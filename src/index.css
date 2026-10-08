@@ -9,8 +9,8 @@
   html {
     background: #fbf7ef;
   }
-  body { @apply font-sans text-ink antialiased; min-height: 100dvh; background: transparent; }
-  #root { min-height: 100dvh; }
+  body { @apply font-sans text-ink antialiased; min-height: 100vh; min-height: 100dvh; background: transparent; }
+  #root { min-height: 100vh; min-height: 100dvh; }
   @media (min-width: 640px) {
     html {
       background:
@@ -20,7 +20,7 @@
         #2d2b39;
       background-size: auto, 44px 44px, 44px 44px, auto;
     }
-    #root { display: grid; min-height: 100dvh; place-items: center; }
+    #root { display: grid; min-height: 100vh; min-height: 100dvh; place-items: center; }
   }
   h1, h2, h3 { text-wrap: balance; }
   ::selection { background: oklch(0.52 0.1 55 / .18); }
@@ -67,7 +67,7 @@
 @media (display-mode: standalone) {
   html,
   body,
-  #root { width: 100%; height: 100%; min-height: 100%; }
+  #root { width: 100%; height: 100vh; height: 100dvh; min-height: 100vh; min-height: 100dvh; }
   html { background: #fbf7ef; }
   body { overflow: hidden; }
   #root { display: block; }
@@ -76,6 +76,7 @@
     inset: 0;
     width: 100%;
     height: 100vh;
+    height: 100dvh;
     max-width: none;
     border-radius: 0;
     box-shadow: none;

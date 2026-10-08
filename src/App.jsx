@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
-import { flushSync } from 'react-dom'
+import { createPortal, flushSync } from 'react-dom'
 import { playAnswerSound } from './answerSounds'
-import { ArrowUpRight, BookOpen, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Coffee, DoorOpen, Droplet, Eye, Flame, Footprints, HelpCircle, Home, KeyRound, Languages, Mail, MessageSquareText, Pencil, RotateCcw, ShieldCheck, Sparkles, Trash2, UserRound, Volume2, X } from 'lucide-react'
+import { BookOpen, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Coffee, DoorOpen, Droplet, Eye, Flame, Footprints, HelpCircle, Home, KeyRound, Languages, Mail, MessageSquareText, Pencil, RotateCcw, ShieldCheck, Sparkles, Trash2, UserRound, Volume2, X } from 'lucide-react'
 import { dailyVerbNotes } from './dailyVerbNotes'
 import { resolveDailyVerbPhrases } from './dailyVerbLesson'
 import { pickDistinctStickerChoices } from './quizChoices'
@@ -1210,8 +1210,7 @@ function App() {
     if (!detailSequence.length) return
     const currentIndex = detailSequence.findIndex((item) => item.word === detailItem?.word)
     const nextIndex = (currentIndex + direction + detailSequence.length) % detailSequence.length
-    const nextItem = detailSequence[nextIndex]
-    setDetailItem(nextItem)
+    setDetailItem(detailSequence[nextIndex])
   }
   const needsLearningGoal = Boolean(targetLanguage && !learningGoalsByLanguage[targetLanguage])
   const showBottomNav = Boolean(targetLanguage && !needsLearningGoal && !['camera', 'analyzing', 'result', 'quiz', 'matching', 'detail'].includes(step))
@@ -1595,7 +1594,7 @@ function HomeView({ language, reviewItems, dailyVerbs, savedDailyWords, dailyGoa
           </button>
         </div>
       </div>
-      {fikaOpen && <FikaSheet rewards={dailyRewards} daysRemaining={saunaDaysRemaining} hasGift={Boolean(nextGift)} onClose={() => setFikaOpen(false)} onEnjoy={() => { setFikaOpen(false); setSaunaStage('sauna') }} />}
+      {fikaOpen && createPortal(<FikaSheet rewards={dailyRewards} daysRemaining={saunaDaysRemaining} hasGift={Boolean(nextGift)} onClose={() => setFikaOpen(false)} onEnjoy={() => { setFikaOpen(false); setSaunaStage('sauna') }} />, document.querySelector('.app-shell'))}
       {saunaStage === 'sauna' && <SaunaMoment capturedWords={dailyRewards.capturedWords} onOpenGift={() => setSaunaStage('gift')} />}
       {saunaStage === 'gift' && nextGift && <SaunaGift language={language} gift={nextGift} capturedWords={dailyRewards.capturedWords} onCollect={() => { onClaimSaunaGift(); setSaunaStage(null) }} />}
     </div>
@@ -2376,8 +2375,14 @@ function DailyVerbView({ item, language, reviewItems, detailSequence, learnedDai
         </div>
       </section>
 
-      <div className="mt-6 flex items-center justify-between gap-2"><button onClick={onPrevious} aria-label="Previous daily verb" className="grid h-11 w-11 place-items-center rounded-full bg-white text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><ChevronLeft size={21} /></button><div className="flex items-center gap-2" role="progressbar" aria-label="Today’s verbs learned" aria-valuemin={0} aria-valuemax={detailSequence.length} aria-valuenow={learnedCount} aria-valuetext={`${learnedCount} of ${detailSequence.length} verbs learned`}>{detailSequence.map((word, index) => <span key={word.word} aria-hidden="true" className={cn('h-2 rounded-full', index === sequenceIndex ? 'w-6 bg-ink' : learnedDailyWords.includes(word.word) ? 'w-2 bg-cinnamon' : 'w-2 bg-stone-300')} />)}</div><button onClick={onNext} aria-label="Next daily verb" className="grid h-11 w-11 place-items-center rounded-full bg-white text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><ChevronRight size={21} /></button></div>
-      <Button onClick={isLearned ? onNext : () => onLearnDailyWord(item)} className="mt-5 w-full" size="lg">{isLearned ? 'Next verb' : 'Mark learned'}</Button>
+      <div className="mt-6 flex items-center justify-center gap-2" role="img" aria-label={`Verb ${sequenceIndex + 1} of ${detailSequence.length}; ${learnedCount} learned`}>
+        {detailSequence.map((word, index) => {
+          const isCurrent = index === sequenceIndex
+          const isLearnedWord = learnedDailyWords.includes(word.word)
+          return <span key={word.word} aria-hidden="true" className={cn('h-2 rounded-full transition-[width,background-color] duration-150', isCurrent ? 'w-6 bg-ink' : isLearnedWord ? 'w-2 bg-cinnamon' : 'w-2 bg-stone-300')} />
+        })}
+      </div>
+      <Button onClick={() => { if (isLearned) onNext(); else { onLearnDailyWord(item); onNext() } }} className="mt-5 w-full" size="lg">{isLearned ? 'Next verb' : 'Mark learned'}</Button>
     </div>
   )
 }
@@ -2572,7 +2577,7 @@ function QuizView({ onAnswer, language, question, finished, logsEarned, woodFull
       <div className="mt-3 flex min-h-9 items-center justify-center" aria-live="polite">
         {selectedItem && isCorrect && <p className="flex items-center gap-2 text-sm font-bold text-[#3f744b]"><span className="grid h-6 w-6 place-items-center rounded-full bg-[#4f8a5b] text-white"><Check size={14} /></span>{question.answer.english}</p>}
       </div>
-      {isCorrect && <Button onClick={advanceQuestion} className="mt-1 w-full" size="lg">{completedCount + 1 >= sessionCount ? 'See result' : 'Next word'} <ArrowUpRight size={19} /></Button>}
+      {isCorrect && <Button onClick={advanceQuestion} className="mt-1 w-full" size="lg">{completedCount + 1 >= sessionCount ? 'See result' : 'Next word'}</Button>}
     </div>
   )
 }
