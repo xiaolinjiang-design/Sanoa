@@ -2870,8 +2870,11 @@ function ProfileView({ languageKey, language, reviewItems, dailyVerbs, savedDail
         <div className="divide-y divide-black/[.06] overflow-hidden rounded-[24px] border border-black/[.06] bg-white">
           <div className="flex min-h-[76px] items-center justify-between gap-4 px-4 py-3">
             <div className="flex min-w-0 items-center gap-3"><Volume2 size={20} className="shrink-0 text-moss" /><div><p className="font-bold text-ink">Auto-play pronunciation</p><p className="mt-1 text-sm text-stone-500">Hear words when a learning card opens.</p></div></div>
-            <SettingToggle checked={settings.soundEffects !== false} onChange={(value) => updateSetting('soundEffects', value)} label="Answer sounds" />
             <SettingToggle checked={settings.autoplay} onChange={(value) => updateSetting('autoplay', value)} label="Auto-play pronunciation" />
+          </div>
+          <div className="flex min-h-[76px] items-center justify-between gap-4 px-4 py-3">
+            <div className="flex min-w-0 items-center gap-3"><Check size={20} className="shrink-0 text-moss" /><div><p className="font-bold text-ink">Answer sounds</p><p className="mt-1 text-sm text-stone-500">Hear feedback in quizzes and matching.</p></div></div>
+            <SettingToggle checked={settings.soundEffects !== false} onChange={(value) => updateSetting('soundEffects', value)} label="Answer sounds" />
           </div>
           <div className="flex min-h-[76px] items-center justify-between gap-4 px-4 py-3">
             <div className="flex min-w-0 items-center gap-3"><Eye size={20} className="shrink-0 text-moss" /><div><p className="font-bold text-ink">Show pronunciation</p><p className="mt-1 text-sm text-stone-500">Display IPA on word cards.</p></div></div>
