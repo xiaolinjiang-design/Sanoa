@@ -733,9 +733,7 @@ function App() {
   const [captureWord, setCaptureWord] = useState(null)
 
   useEffect(() => {
-    if (captureMode !== 'object' || !['home', 'camera'].includes(step)) return
-    const timer = window.setTimeout(() => warmCutoutModel().catch(() => {}), step === 'camera' ? 0 : 600)
-    return () => window.clearTimeout(timer)
+    if (step === 'camera' && captureMode === 'object') warmCutoutModel().catch(() => {})
   }, [step, captureMode])
 
   const [captureError, setCaptureError] = useState('')
@@ -1342,8 +1340,8 @@ function LanguageChoice({ onSelect, initialLanguage = null, goalOnly = false }) 
         <div className="relative h-full overflow-hidden bg-[#dbe8ef]">
           <img src="/assets/reindeer-ice-swimming.png" width="512" height="512" alt="The reindeer trying Finnish ice swimming" className="pointer-events-none absolute inset-0 h-full w-full select-none object-cover object-[58%_center]" />
           <div className="absolute bottom-5 right-4 flex gap-2">
-            <div className="flex h-11 items-center gap-1.5 rounded-full bg-white/90 px-3 text-sm font-bold tabular-nums text-cinnamon"><img src="/assets/sauna-bucket-clay.png" width="28" height="28" alt="" className="h-7 w-7 object-contain" />3</div>
-            <div className="flex h-11 items-center gap-1.5 rounded-full bg-white/90 px-3 text-sm font-bold tabular-nums text-cinnamon"><img src="/assets/sauna-firewood-clay.png" width="28" height="28" alt="" className="h-7 w-7 object-contain" />3</div>
+            <div className="flex h-11 items-center gap-1.5 rounded-full bg-white/90 px-3 text-sm font-bold tabular-nums text-cinnamon"><img src="/assets/sauna-bucket-icon.png" width="28" height="28" alt="" className="h-7 w-7 object-contain" />3</div>
+            <div className="flex h-11 items-center gap-1.5 rounded-full bg-white/90 px-3 text-sm font-bold tabular-nums text-cinnamon"><img src="/assets/sauna-firewood-icon.png" width="28" height="28" alt="" className="h-7 w-7 object-contain" />3</div>
           </div>
         </div>
       ),
@@ -1551,11 +1549,11 @@ function HomeView({ language, reviewItems, dailyVerbs, savedDailyWords, dailyGoa
   return (
     <div id="content" className="home-canvas min-h-full px-5">
       <section className="home-hero relative -mx-5 min-h-[350px] overflow-hidden px-6 pb-8 pt-6">
-        <img src="/assets/reindeer-sauna-prep-v1.png" alt="A reindeer preparing a Finnish sauna" className="pointer-events-none absolute -bottom-3 left-0 h-[340px] w-[340px] object-contain" />
+        <img src="/assets/reindeer-sauna-prep-home.png" width="680" height="680" fetchPriority="high" alt="A reindeer preparing a Finnish sauna" className="pointer-events-none absolute -bottom-3 left-0 h-[340px] w-[340px] object-contain" />
         {saunaReady && <span className="pointer-events-none absolute left-[67%] top-[31%] h-24 w-12 animate-pulse rounded-full bg-white/35 blur-xl" aria-hidden="true" />}
         <div className="relative z-10 flex items-center justify-end">
           <button onClick={() => setFikaOpen(true)} aria-label="Open sauna rewards" className="shrink-0 rounded-full transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-400 active:scale-[.96]">
-            {saunaClaimed || saunaReady || saunaDaysRemaining || !nextGift ? <Chip className="h-11 min-w-[88px] flex-nowrap justify-center gap-1.5 whitespace-nowrap bg-white/80 py-1 pl-1.5 pr-3 text-cinnamon backdrop-blur-sm"><img src={saunaReady ? nextGift.image : '/assets/reindeer-sauna.png'} alt="" width="32" height="32" className="pointer-events-none h-8 w-8 shrink-0 rounded-full object-cover" /><span>{saunaClaimed ? 'Enjoyed' : saunaReady ? 'Ready' : saunaDaysRemaining ? `${saunaDaysRemaining}d` : 'Complete'}</span></Chip> : <span className="flex gap-1.5"><Chip className="h-10 gap-1 bg-white/80 py-1 pl-1 pr-2.5 text-cinnamon backdrop-blur-sm"><img src="/assets/sauna-bucket-clay.png" alt="" width="30" height="30" className="pointer-events-none h-7 w-7 shrink-0 object-contain" />{captureCount}/3</Chip><Chip className="h-10 gap-1 bg-white/80 py-1 pl-1 pr-2.5 text-cinnamon backdrop-blur-sm"><img src="/assets/sauna-firewood-clay.png" alt="" width="30" height="30" className="pointer-events-none h-7 w-7 shrink-0 object-contain" />{Math.min(woodCount, 3)}/3</Chip></span>}
+            {saunaClaimed || saunaReady || saunaDaysRemaining || !nextGift ? <Chip className="h-11 min-w-[88px] flex-nowrap justify-center gap-1.5 whitespace-nowrap bg-white/80 py-1 pl-1.5 pr-3 text-cinnamon backdrop-blur-sm"><img src={saunaReady ? nextGift.image : '/assets/reindeer-sauna.png'} alt="" width="32" height="32" className="pointer-events-none h-8 w-8 shrink-0 rounded-full object-cover" /><span>{saunaClaimed ? 'Enjoyed' : saunaReady ? 'Ready' : saunaDaysRemaining ? `${saunaDaysRemaining}d` : 'Complete'}</span></Chip> : <span className="flex gap-1.5"><Chip className="h-10 gap-1 bg-white/80 py-1 pl-1 pr-2.5 text-cinnamon backdrop-blur-sm"><img src="/assets/sauna-bucket-icon.png" alt="" width="30" height="30" className="pointer-events-none h-7 w-7 shrink-0 object-contain" />{captureCount}/3</Chip><Chip className="h-10 gap-1 bg-white/80 py-1 pl-1 pr-2.5 text-cinnamon backdrop-blur-sm"><img src="/assets/sauna-firewood-icon.png" alt="" width="30" height="30" className="pointer-events-none h-7 w-7 shrink-0 object-contain" />{Math.min(woodCount, 3)}/3</Chip></span>}
           </button>
         </div>
         <div className="relative ml-auto mt-5 min-h-[220px] w-[9.5rem]">
