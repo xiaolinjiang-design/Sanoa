@@ -168,8 +168,10 @@
   .lesson-details > summary svg { flex: none; transition: transform 150ms ease-out; }
   .lesson-details[open] > summary svg { transform: rotate(180deg); }
 
-  .sticker-cutout {
-    filter:
+  .sticker-cutout,
+  .captured-sticker-cutout,
+  .capture-result-cutout-glow {
+    --sticker-outline-filter:
       drop-shadow(0 0 0 white)
       drop-shadow(2px 0 0 white)
       drop-shadow(-2px 0 0 white)
@@ -178,35 +180,17 @@
       drop-shadow(1px 1px 0 white)
       drop-shadow(-1px 1px 0 white)
       drop-shadow(1px -1px 0 white)
-      drop-shadow(-1px -1px 0 white)
-      drop-shadow(0 6px 6px rgb(38 35 49 / 0.10));
+      drop-shadow(-1px -1px 0 white);
   }
 
+  .sticker-cutout,
   .captured-sticker-cutout {
-    filter:
-      drop-shadow(0 0 0 white)
-      drop-shadow(3px 0 0 white)
-      drop-shadow(-3px 0 0 white)
-      drop-shadow(0 3px 0 white)
-      drop-shadow(0 -3px 0 white)
-      drop-shadow(2px 2px 0 white)
-      drop-shadow(-2px 2px 0 white)
-      drop-shadow(2px -2px 0 white)
-      drop-shadow(-2px -2px 0 white)
-      drop-shadow(0 7px 7px rgb(38 35 49 / .12));
+    filter: var(--sticker-outline-filter) drop-shadow(0 6px 6px rgb(38 35 49 / .10));
   }
 
   .capture-result-cutout-glow {
     filter:
-      drop-shadow(0 0 0 white)
-      drop-shadow(3px 0 0 white)
-      drop-shadow(-3px 0 0 white)
-      drop-shadow(0 3px 0 white)
-      drop-shadow(0 -3px 0 white)
-      drop-shadow(2px 2px 0 white)
-      drop-shadow(-2px 2px 0 white)
-      drop-shadow(2px -2px 0 white)
-      drop-shadow(-2px -2px 0 white)
+      var(--sticker-outline-filter)
       drop-shadow(0 0 12px rgb(255 255 255 / .95))
       drop-shadow(0 0 26px rgb(188 119 66 / .3))
       drop-shadow(0 9px 9px rgb(38 35 49 / .14));
@@ -331,13 +315,6 @@
 
   .collection-sticker-stage {
     animation-delay: 90ms;
-  }
-
-  .scatter-sticker {
-    opacity: 0;
-    transform-origin: center;
-    animation: sticker-scatter-in 340ms cubic-bezier(0.32, 0.72, 0, 1) both;
-    will-change: transform, opacity;
   }
 
   .quiz-wrong-shake {
@@ -557,12 +534,6 @@
   100% { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes sticker-scatter-in {
-  0% { opacity: 0; transform: translateY(18px) scale(.94) rotate(0deg); }
-  70% { opacity: 1; }
-  100% { opacity: 1; }
-}
-
 @keyframes quiz-wrong-shake {
   0%, 100% { transform: translateX(0); }
   25% { transform: translateX(-6px); }
@@ -768,7 +739,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
-  .celebration-card, .confetti-piece, .confetti-spark, .collection-page, .collection-detail-header, .collection-detail-copy, .collection-sticker-stage, .scatter-sticker, .fox-buddy-stage, .fox-buddy-image, .fox-eye-blink, .fox-buddy::after { animation: none !important; opacity: 1; }
+  .celebration-card, .confetti-piece, .confetti-spark, .collection-page, .collection-detail-header, .collection-detail-copy, .collection-sticker-stage, .fox-buddy-stage, .fox-buddy-image, .fox-eye-blink, .fox-buddy::after { animation: none !important; opacity: 1; }
   .fox-eye-blink { display: none; }
   .confetti-piece, .confetti-spark { display: none; }
   .capture-focus-halo, .capture-orbit, .capture-particle { display: none; }

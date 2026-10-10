@@ -1,4 +1,25 @@
 import { getPhraseFrame } from './reviewCardContent.js'
+import { dailyVerbDetails } from './dailyVerbNotes.js'
+
+const persons = {
+  fi: [
+    ['I', 'minä'], ['you', 'sinä'], ['he / she / it', 'hän / se'],
+    ['we', 'me'], ['you (plural)', 'te'], ['they', 'he / ne'],
+  ],
+  sv: [
+    ['I', 'jag'], ['you', 'du'], ['he / she / it', 'han / hon / den / det'],
+    ['we', 'vi'], ['you (plural)', 'ni'], ['they', 'de'],
+  ],
+}
+
+export function getDailyVerbStudy(word, languageKey) {
+  const detail = dailyVerbDetails[languageKey]?.[word]
+  const forms = detail?.forms || (detail?.present ? Array(6).fill(detail.present) : [])
+  return {
+    persons: forms.map((form, index) => ({ label: persons[languageKey][index][0], pronoun: persons[languageKey][index][1], form })),
+    chunks: (detail?.chunks || []).map(([text, meaning]) => ({ text, meaning })),
+  }
+}
 
 export function resolveDailyVerbPhrases(item, note = {}, rules = []) {
   const linkedWord = item.linkedWord?.trim().toLocaleLowerCase()
