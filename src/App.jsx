@@ -3,9 +3,11 @@ import { createPortal, flushSync } from 'react-dom'
 import { playAnswerSound } from './answerSounds'
 import { BookOpen, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Coffee, DoorOpen, Droplet, Eye, Flame, Footprints, HelpCircle, Home, KeyRound, Languages, Mail, MessageSquareText, Pencil, RotateCcw, ShieldCheck, Sparkles, Trash2, UserRound, Volume2, X } from 'lucide-react'
 import { dailyVerbNotes } from './dailyVerbNotes'
-import { resolveDailyVerbPhrases } from './dailyVerbLesson'
+import { getDailyVerbStudy, resolveDailyVerbPhrases } from './dailyVerbLesson'
 import { pickDistinctStickerChoices } from './quizChoices'
-import { buildReviewCardContent, getPhraseFrame } from './reviewCardContent'
+import { buildReviewCardContent } from './reviewCardContent'
+import { getCollectionWordStudy } from './collectionWordStudy'
+import { restoreCutoutSticker } from './stickerStorage'
 import { Button } from './components/ui/button'
 import { Card } from './components/ui/card'
 import { Chip } from './components/ui/chip'
@@ -126,7 +128,7 @@ function persistValue(key, value) {
 }
 
 function savedReviewItem(item) {
-  const { captureImage, photoCropImage, cutoutImage, ...serializableItem } = item
+  const { captureImage, photoCropImage, ...serializableItem } = restoreCutoutSticker(item)
   return serializableItem
 }
 
@@ -141,12 +143,14 @@ function restoreBuiltInStickerAssets(itemsByLanguage) {
       ...Object.values(wordBank).map((entry) => entry.targets[languageKey]),
       ...Object.values(phraseBank).map((entry) => entry.targets[languageKey]),
     ]
-    return [languageKey, items.map((item) => {
+    return [languageKey, items.map((savedItem) => {
+      const item = restoreCutoutSticker(savedItem)
       const gift = gifts.find((entry) => entry.word === item.word)
       const builtIn = builtInItems.find((entry) => entry.word === item.word && entry.sentence === item.sentence)
       return {
         ...item,
         ...(gift ? { image: gift.image, collection: gift.collection } : {}),
+        ...(!item.stickerImage && !item.image && builtIn?.image ? { image: builtIn.image } : {}),
         ...(!item.sentenceTranslation && builtIn?.sentenceTranslation ? { sentenceTranslation: builtIn.sentenceTranslation } : {}),
       }
     })]
@@ -374,16 +378,16 @@ function WaterBottle() {
   )
 }
 
-function Sticker({ item, large = false, hero = false }) {
+function Sticker({ item, large = false, hero = false, card = false, loading }) {
   const image = item.stickerImage || item.captureImage || item.image
   const isCutout = Boolean(item.cutoutIsTransparent || item.image)
   const adjustment = item.stickerAdjustment
   return (
-    <div className={cn('grid shrink-0 place-items-center', hero ? 'h-44 w-44' : large ? 'h-32 w-28' : 'h-20 w-20')}>
+    <div className={cn('grid shrink-0 place-items-center', hero ? 'h-44 w-44' : card ? 'h-[72px] w-full' : large ? 'h-32 w-28' : 'h-20 w-20')}>
       {image ? (
-        <img src={image} alt="" style={adjustment ? { transform: `scale(${adjustment.scale}) rotate(${adjustment.rotation}deg)` } : undefined} className={cn('sticker-cutout rotate-[-2deg]', item.cutoutIsTransparent && 'captured-sticker-cutout', isCutout ? 'object-contain' : 'rounded-[22%] border-2 border-white object-cover', hero ? 'h-36 w-36' : large ? 'h-24 w-24' : 'h-16 w-16')} />
+        <img src={image} alt="" loading={loading} style={adjustment ? { transform: `scale(${adjustment.scale}) rotate(${adjustment.rotation}deg)` } : undefined} className={cn('sticker-cutout rotate-[-2deg]', item.cutoutIsTransparent && 'captured-sticker-cutout', isCutout ? 'object-contain' : 'rounded-[22%] border-2 border-white object-cover', hero ? 'h-36 w-36' : card ? 'h-[72px] w-[72px]' : large ? 'h-24 w-24' : 'h-16 w-16')} />
       ) : (
-        <span className={cn('sticker-cutout select-none', hero ? 'text-[7rem]' : large ? 'text-6xl' : 'text-4xl')} aria-hidden="true">{item.icon}</span>
+        <span className={cn('sticker-cutout select-none', hero ? 'text-[7rem]' : card ? 'text-[3.5rem]' : large ? 'text-6xl' : 'text-4xl')} aria-hidden="true">{item.icon}</span>
       )}
     </div>
   )
@@ -659,47 +663,8 @@ function getLearningStats(items, dailyVerbs, savedDailyWords) {
   return { dailySavedCount, dailyTotal: dailyVerbs.length, wordCount, phraseCount, collectionCount }
 }
 
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max)
-}
-
 function localDateKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
-
-function useStickerGravity() {
-  const [gravity, setGravity] = useState({ x: 0, y: 0 })
-  const initialOrientation = useRef(null)
-
-  useEffect(() => {
-    if (!window.DeviceOrientationEvent) return undefined
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return undefined
-
-    const handleOrientation = (event) => {
-      if (!Number.isFinite(event.gamma) || !Number.isFinite(event.beta)) return
-      if (!initialOrientation.current) initialOrientation.current = { gamma: event.gamma, beta: event.beta }
-      const x = clamp((event.gamma - initialOrientation.current.gamma) / 18, -1, 1)
-      const y = clamp((event.beta - initialOrientation.current.beta) / 22, -1, 1)
-      setGravity((current) => ({ x: current.x * .72 + x * .28, y: current.y * .72 + y * .28 }))
-    }
-
-    window.addEventListener('deviceorientation', handleOrientation)
-    return () => window.removeEventListener('deviceorientation', handleOrientation)
-  }, [])
-
-  const bindGravity = {
-    onPointerMove: (event) => {
-      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
-      if (event.pointerType !== 'mouse') return
-      const rect = event.currentTarget.getBoundingClientRect()
-      const x = ((event.clientX - rect.left) / rect.width - 0.5) * 2
-      const y = ((event.clientY - rect.top) / rect.height - 0.5) * 2
-      setGravity({ x: clamp(x, -1, 1), y: clamp(y, -1, 1) })
-    },
-    onPointerLeave: (event) => { if (event.pointerType === 'mouse') setGravity({ x: 0, y: 0 }) },
-  }
-
-  return { gravity, bindGravity }
 }
 
 function SentenceParts({ parts, language }) {
@@ -751,6 +716,7 @@ function App() {
   const [detailItem, setDetailItem] = useState(null)
   const [detailBackStep, setDetailBackStep] = useState('home')
   const [collectionDetail, setCollectionDetail] = useState(null)
+  const [reviewCollectionFilter, setReviewCollectionFilter] = useState('All')
   const [celebrationOpen, setCelebrationOpen] = useState(false)
   const [dailyCelebrationRewardEarned, setDailyCelebrationRewardEarned] = useState(true)
   const [profileSettings, setProfileSettings] = useState(() => readStoredValue('lingo-profile-settings', { dailyGoal: 3, autoplay: true, showIpa: true }))
@@ -1031,8 +997,8 @@ function App() {
     if (!captureResult) return
     const currentItems = reviewItemsByLanguage[targetLanguage] || reviewSeeds[targetLanguage]
     const nextItems = currentItems.some((item) => item.word === captureResult.word)
-      ? currentItems.map((item) => item.word === captureResult.word ? { ...item, ...captureResult } : item)
-      : [captureResult, ...currentItems]
+      ? currentItems.map((item) => item.word === captureResult.word ? restoreCutoutSticker({ ...item, ...captureResult }) : item)
+      : [restoreCutoutSticker(captureResult), ...currentItems]
     const nextLibrary = { ...reviewItemsByLanguage, [targetLanguage]: nextItems }
     try {
       window.localStorage.setItem('lingo-review-items', JSON.stringify(Object.fromEntries(Object.entries(nextLibrary).map(([key, items]) => [key, items.map(savedReviewItem)]))))
@@ -1139,6 +1105,13 @@ function App() {
   const markDailyWordSaved = (item) => {
     if (!targetLanguage) return
     if (!dailyVerbs.some((dailyWord) => dailyWord.word === item.word) || savedDailyWords.includes(item.word)) return
+    if (!reviewItems.some((savedItem) => savedItem.word === item.word)) {
+      updateReviewItems((items) => items.some((savedItem) => savedItem.word === item.word) ? items : [item, ...items])
+      setReviewScheduleByLanguage((current) => ({
+        ...current,
+        [targetLanguage]: { ...(current[targetLanguage] || {}), [item.word]: { stage: 0, dueAt: Date.now() } },
+      }))
+    }
     markFikaTask('use')
 
     const nextWords = [...savedDailyWords, item.word]
@@ -1242,7 +1215,7 @@ function App() {
         ) : step === 'analyzing' ? (
           <AnalyzingView captureMode={captureMode} image={capturedImage} stage={captureStage} cutout={captureCutout} word={captureWord} language={languages[targetLanguage]} error={captureError} onRetry={() => setStep('camera')} />
         ) : step === 'review' ? (
-          <ReviewView items={reviewItems} practiceItems={practiceItems} dueCount={dueReviewItems.length} logAvailable={!dailyFika.tasks.includes('recall') && (dailyFika.woodCount || 0) < 3} woodFull={(dailyFika.woodCount || 0) >= 3} onCapture={() => openCamera('object')} onStartQuiz={startQuiz} onOpenCollection={openCollection} />
+          <ReviewView languageKey={targetLanguage} items={reviewItems} practiceItems={practiceItems} selectedCollection={reviewCollectionFilter} onSelectCollection={setReviewCollectionFilter} dueCount={dueReviewItems.length} logAvailable={!dailyFika.tasks.includes('recall') && (dailyFika.woodCount || 0) < 3} woodFull={(dailyFika.woodCount || 0) >= 3} onCapture={() => openCamera('object')} onStartQuiz={startQuiz} onOpenWord={(item) => openWordDetails(item, 'review')} />
         ) : step === 'quiz' ? (
           <QuizView onAnswer={(correct) => profileSettings.soundEffects !== false && playAnswerSound(correct)} language={languages[targetLanguage]} question={quizQuestion} finished={quizFinished} logsEarned={quizLogsEarned} woodFull={(dailyFika.woodCount || 0) >= 3} sessionCount={quizSessionWords.length} completedCount={quizCompletedWords.length} onBack={() => setStep('review')} onNext={nextQuizQuestion} onMistake={(item) => { setQuizMistakes((count) => count + 1); handleReviewMistake(item) }} onCorrect={handleReviewCorrect} />
         ) : step === 'matching' ? (
@@ -1254,7 +1227,7 @@ function App() {
         ) : step === 'detail' ? (
           detailSequence.length > 0
             ? <DailyVerbView key={detailItem.word} item={detailItem} language={languages[targetLanguage]} reviewItems={reviewItems} detailSequence={detailSequence} learnedDailyWords={savedDailyWords} onPrevious={() => moveDetail(-1)} onNext={() => moveDetail(1)} onBack={() => setStep(detailBackStep)} onLearnDailyWord={markDailyWordSaved} />
-            : <WordDetailView item={detailItem} language={languages[targetLanguage]} reviewItems={reviewItems} onBack={() => setStep(detailBackStep)} onAddRelatedWord={addRelatedWord} onDelete={deleteSticker} onPhraseTranslation={savePhraseTranslation} />
+            : <WordDetailView item={detailItem} language={languages[targetLanguage]} reviewItems={reviewItems} backLabel={detailBackStep === 'review' ? 'Back to review' : detailBackStep === 'collection' ? 'Back to collection' : 'Back'} onBack={() => setStep(detailBackStep)} onAddRelatedWord={addRelatedWord} onDelete={deleteSticker} onPhraseTranslation={savePhraseTranslation} />
         ) : (
           <ResultView language={languages[targetLanguage]} item={previewItem} captureMode={captureMode} storageError={storageError} autoPlayPronunciation={profileSettings.autoplay} onRetake={() => setStep('camera')} onEdit={() => setStickerEdit({ scale: captureResult?.stickerAdjustment?.scale ?? 1, rotation: captureResult?.stickerAdjustment?.rotation ?? 0, usePhoto: captureResult?.stickerAdjustment?.usePhoto ?? false })} onSave={saveSticker} />
         )}
@@ -2075,6 +2048,8 @@ function AnalyzingView({ captureMode, image, stage, cutout, word, language, erro
 function StickerAdjustSheet({ item, adjustment, onChange, onClose, onSave }) {
   const dialogRef = useDialogFocus(onClose)
   const setValue = (key, value) => onChange((current) => ({ ...current, [key]: value }))
+  const source = adjustment.usePhoto ? 'photo' : 'cutout'
+  const selectSource = (value) => onChange((current) => ({ ...current, usePhoto: value === 'photo' }))
 
   return (
     <div className="absolute inset-0 z-50 flex items-end bg-ink/35 sm:rounded-[36px]" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
@@ -2095,7 +2070,9 @@ function StickerAdjustSheet({ item, adjustment, onChange, onClose, onSave }) {
             <input id="sticker-tilt" type="range" min="-12" max="12" step="1" value={adjustment.rotation} onChange={(event) => setValue('rotation', Number(event.target.value))} className="sticker-adjust-range mt-2 w-full" style={{ '--range-progress': `${((adjustment.rotation + 12) / 24) * 100}%` }} />
           </div>
         </div>
-        {item.kind === 'object' && item.photoCropImage && <button type="button" onClick={() => setValue('usePhoto', !adjustment.usePhoto)} className="mt-3 min-h-11 w-full rounded-full text-sm font-bold text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss">{adjustment.usePhoto ? 'Use cutout instead' : 'Use photo crop instead'}</button>}
+        {item.kind === 'object' && item.photoCropImage && <div className="mt-4 flex flex-wrap gap-2" aria-label="Sticker image style">
+          {[['cutout', 'Cutout'], ['photo', 'Photo crop']].map(([value, label]) => <button key={value} type="button" onClick={() => selectSource(value)} aria-pressed={source === value} className={cn('min-h-11 rounded-full border px-4 text-sm font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss', source === value ? 'border-ink bg-ink text-white' : 'border-stone-200 text-cinnamon')}>{label}</button>)}
+        </div>}
         <Button type="button" onClick={onSave} className="mt-4 w-full" size="lg">Save edits</Button>
         <button type="button" onClick={onClose} className="mt-2 min-h-11 w-full rounded-full text-sm font-bold text-stone-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss">Cancel</button>
       </section>
@@ -2201,7 +2178,7 @@ function ResultView({ language, item, captureMode, storageError, autoPlayPronunc
         <span aria-hidden="true" />
       </header>
 
-      <section className="grid h-[min(27dvh,220px)] min-h-[160px] place-items-center py-3" aria-label={isPhraseMode ? 'Captured phrase sticker' : 'Captured object sticker'}>
+      <section className="relative grid h-[min(27dvh,220px)] min-h-[160px] place-items-center py-3" aria-label={isPhraseMode ? 'Captured phrase sticker' : 'Captured object sticker'}>
         <div className={cn(isPhraseMode && 'animate-pop')} style={target.stickerAdjustment ? { transform: `scale(${target.stickerAdjustment.scale}) rotate(${target.stickerAdjustment.rotation}deg)` } : undefined}>
           {isPhraseMode ? <div className="sticker-cutout h-28 w-[min(68vw,250px)] rotate-[-2deg] overflow-hidden rounded-[22px] border-[3px] border-white bg-white shadow-[0_0_22px_rgba(188,119,66,.18),0_12px_26px_rgba(38,35,49,.14)]"><img src={item.stickerImage} alt="Captured phrase" className="h-full w-full object-cover" /></div> : <img src={item.stickerImage} alt={`Sticker of ${item.english}`} className={cn('capture-result-sticker h-[min(21dvh,170px)] w-[min(52vw,190px)]', item.cutoutIsTransparent ? 'captured-sticker-cutout capture-result-cutout-glow object-contain' : 'rounded-[22px] border-[3px] border-white object-cover shadow-[0_8px_20px_rgba(38,35,49,.18)]')} />}
         </div>
@@ -2264,7 +2241,7 @@ function getFinnishLearningMeta(item) {
 
   const collection = item.collection?.toLowerCase() || ''
   const theme = collection.includes('home') ? 'Home & housing' : collection.includes('café') || collection.includes('kitchen') ? 'Shops & services' : 'Everyday life'
-  const familyForms = [{ form: item.word, meaning: item.english }, ...(item.form ? [{ form: item.form, meaning: item.formMeaning || 'related form' }] : [])]
+  const familyForms = [{ form: item.word, meaning: item.english }]
   const contextualRule = contextualVerbRules.fi.find((rule) => rule.objects[word])
   const usefulVerb = contextualRule ? { verb: contextualRule.verb.word, verbMeaning: contextualRule.verb.english } : {}
 
@@ -2288,6 +2265,17 @@ const reviewFormHints = {
   },
 }
 
+function VerbPersonForms({ study }) {
+  return <div className="mt-4 divide-y divide-black/[.07]">
+    {study.persons.map(({ label, pronoun, form }) => (
+      <div key={label} className="grid grid-cols-[96px_1fr] items-baseline gap-3 py-2.5 first:pt-0 last:pb-0">
+        <span className="text-sm text-stone-600">{label}</span>
+        <span className="font-serif text-lg font-semibold text-ink"><span className="font-sans text-sm font-medium text-stone-500">{pronoun}</span> {form}</span>
+      </div>
+    ))}
+  </div>
+}
+
 function DailyVerbView({ item, language, reviewItems, detailSequence, learnedDailyWords, onPrevious, onNext, onBack, onLearnDailyWord }) {
   const [activeTab, setActiveTab] = useState('phrases')
   const swipeStart = useRef(null)
@@ -2295,13 +2283,14 @@ function DailyVerbView({ item, language, reviewItems, detailSequence, learnedDai
   const sequenceIndex = detailSequence.findIndex((word) => word.word === item.word)
   const learnedCount = detailSequence.filter((word) => learnedDailyWords.includes(word.word)).length
   const isLearned = learnedDailyWords.includes(item.word)
+  const isCollected = reviewItems.some((savedItem) => savedItem.word === item.word)
   const note = dailyVerbNotes[language.locale.slice(0, 2)]?.[item.word] || {}
   const variants = (note.variants || (item.form ? [{ form: item.form, meaning: item.formMeaning }] : [])).slice(0, 1)
   const sourceEvidence = useFinnishEvidence(item, language, variants[0]?.form)
   const linkedEnglish = item.linkedEnglish || reviewItems.find((word) => word.word === item.linkedWord)?.english
   const phrases = resolveDailyVerbPhrases({ ...item, linkedEnglish }, note, contextualVerbRules[language.locale.slice(0, 2)] || [])
+  const study = getDailyVerbStudy(item.word, language.locale.slice(0, 2))
   const hasStickerPhrase = phrases.some((phrase) => phrase.linkedWord === item.linkedWord)
-  const frame = getPhraseFrame(phrases)
   const tabs = [{ id: 'phrases', label: 'Phrases' }, { id: 'forms', label: 'Forms' }, { id: 'chunks', label: 'Chunks' }]
 
   const startSwipe = (event) => {
@@ -2368,8 +2357,29 @@ function DailyVerbView({ item, language, reviewItems, detailSequence, learnedDai
               </div>
             })}</div>
           </div>}
-          {activeTab === 'forms' && <div><p className="text-xs font-bold uppercase tracking-[.14em] text-cinnamon">Verb forms</p><p className="mt-3 text-sm text-stone-600">Base form <span className="font-semibold text-ink">{item.word}</span></p><div className="mt-4 grid gap-2">{variants.map((variant) => <div key={variant.form} className="flex items-baseline justify-between gap-3 border-t border-black/[.07] pt-2"><span className="font-serif text-xl font-bold text-ink">{variant.form}</span><span className="text-right text-sm text-stone-600">{variant.meaning}</span></div>)}</div>{variants.length ? <p className="mt-4 text-xs leading-5 text-stone-600">{note.formIntro || 'The verb changes form to show who acts or when it happens.'}</p> : <p className="mt-4 text-sm text-stone-600">No extra forms are available for this verb yet.</p>}</div>}
-          {activeTab === 'chunks' && (frame ? <div><p className="text-sm leading-5 text-stone-600">Keep the beginning. Change the last piece.</p><p className="mt-3 font-serif text-xl font-bold text-ink">{frame.fixed} <span className="text-cinnamon">…</span></p><div className="mt-4 divide-y divide-black/[.07]">{frame.choices.map((choice) => <div key={choice.text} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"><div><p className="font-serif text-lg font-semibold text-ink">{choice.variable}</p><p className="text-sm text-stone-600">{choice.meaning}</p></div><button onClick={() => speak(choice.text, language.locale)} aria-label={`Play ${choice.text}`} className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-cream text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><Volume2 size={19} /></button></div>)}</div></div> : <div><p className="text-sm leading-5 text-stone-600">Useful expressions to say aloud.</p><div className="mt-3 divide-y divide-black/[.07]">{phrases.map((phrase) => <div key={phrase.text} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"><div><p className="font-serif text-lg font-semibold text-ink">{phrase.text}</p><p className="mt-1 text-sm text-stone-600">{phrase.meaning}</p></div><button onClick={() => speak(phrase.text, language.locale)} aria-label={`Play ${phrase.text}`} className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-cream text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><Volume2 size={19} /></button></div>)}</div></div>)}
+          {activeTab === 'forms' && (
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[.14em] text-cinnamon">Present tense</p>
+              <p className="mt-3 text-sm text-stone-600">Base form <span className="font-semibold text-ink">{item.word}</span></p>
+              {study.persons.length ? <VerbPersonForms study={study} /> : variants.length ? (
+                <div className="mt-4 border-t border-black/[.07] pt-3 font-serif text-lg font-semibold text-ink">{variants[0].form} <span className="font-sans text-sm font-normal text-stone-600">{variants[0].meaning}</span></div>
+              ) : <p className="mt-4 text-sm text-stone-600">No verified person forms are available for this verb yet.</p>}
+              {language.locale.startsWith('sv') && study.persons.length > 0 && <p className="mt-4 text-xs leading-5 text-stone-600">Swedish uses the same present-tense verb form with every subject.</p>}
+            </div>
+          )}
+          {activeTab === 'chunks' && (
+            <div>
+              <p className="text-sm leading-5 text-stone-600">Short combinations to use in your own sentences.</p>
+              <div className="mt-3 divide-y divide-black/[.07]">
+                {(study.chunks.length ? study.chunks : [{ text: item.word, meaning: item.english }]).map((chunk) => (
+                  <div key={chunk.text} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                    <div><p className="font-serif text-lg font-semibold text-ink">{chunk.text}</p><p className="text-sm text-stone-600">{chunk.meaning}</p></div>
+                    <button onClick={() => speak(chunk.text, language.locale)} aria-label={`Play ${chunk.text}`} className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-cream text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><Volume2 size={19} /></button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
@@ -2380,7 +2390,7 @@ function DailyVerbView({ item, language, reviewItems, detailSequence, learnedDai
           return <span key={word.word} aria-hidden="true" className={cn('h-2 rounded-full transition-[width,background-color] duration-150', isCurrent ? 'w-6 bg-ink' : isLearnedWord ? 'w-2 bg-cinnamon' : 'w-2 bg-stone-300')} />
         })}
       </div>
-      <Button onClick={() => { if (isLearned) onNext(); else { onLearnDailyWord(item); onNext() } }} className="mt-5 w-full" size="lg">{isLearned ? 'Next verb' : 'Mark learned'}</Button>
+      <Button onClick={() => { if (isLearned) onNext(); else { onLearnDailyWord(item); onNext() } }} className="mt-5 w-full" size="lg">{isLearned ? 'Next verb' : isCollected ? 'Continue' : 'Add to collection'}</Button>
     </div>
   )
 }
@@ -2414,27 +2424,69 @@ function PhraseTranslation({ phrase, language, onResolved }) {
 }
 
 function HighlightedPhrase({ text, form, locale }) {
-  if (!form || !text.toLocaleLowerCase(locale).includes(form.toLocaleLowerCase(locale))) return text
-  return text.split(/(\p{L}+)/u).map((part, index) => part.toLocaleLowerCase(locale) === form.toLocaleLowerCase(locale) ? <span key={index} className="text-cinnamon">{part}</span> : part)
+  if (!form) return text
+  const start = text.toLocaleLowerCase(locale).indexOf(form.toLocaleLowerCase(locale))
+  if (start < 0) return text
+  const end = start + form.length
+  return <>{text.slice(0, start)}<span className="font-bold text-cinnamon">{text.slice(start, end)}</span>{text.slice(end)}</>
 }
 
-function WordDetailView({ item, language, reviewItems, onBack, onAddRelatedWord, onDelete, onPhraseTranslation }) {
+function WordDetailView({ item, language, reviewItems, backLabel, onBack, onAddRelatedWord, onDelete, onPhraseTranslation }) {
   const [activeTab, setActiveTab] = useState('phrases')
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [generatedStudy, setGeneratedStudy] = useState(null)
+  const [studyStatus, setStudyStatus] = useState('idle')
+  const [studyAttempt, setStudyAttempt] = useState(0)
   const tabRefs = useRef([])
   const languageKey = language.locale.slice(0, 2)
+  const studyKey = `${languageKey}:${item?.word?.trim().toLocaleLowerCase(language.locale)}:${item?.english?.trim().toLocaleLowerCase()}`
+  const collectionStudy = getCollectionWordStudy(item?.word, languageKey)
+  const savedStudy = generatedStudy?.key === studyKey ? generatedStudy.value : null
   const verbNote = item && dailyVerbNotes[languageKey]?.[item.word]
   const linkedEnglish = item?.linkedEnglish || reviewItems.find((word) => word.word === item?.linkedWord)?.english
-  const recommendedPhrases = item && (verbNote || item.lessonPhrases) ? resolveDailyVerbPhrases({ ...item, linkedEnglish }, verbNote, contextualVerbRules[languageKey] || []) : []
+  const verbPhrases = item && (verbNote || item.lessonPhrases) ? resolveDailyVerbPhrases({ ...item, linkedEnglish }, verbNote, contextualVerbRules[languageKey] || []) : []
   const learningMeta = item && language.locale?.startsWith('fi') ? getFinnishLearningMeta(item) : null
   const formHint = item && reviewFormHints[languageKey]?.[item.word?.toLocaleLowerCase(language.locale)]
-  const familyForms = [formHint, ...(verbNote?.variants || []), ...(learningMeta?.familyForms || [])].filter(Boolean)
-  const content = item ? buildReviewCardContent(item, familyForms, recommendedPhrases) : null
+  const captureExample = item && captureLearningExamples[languageKey]?.[item.word?.trim().toLocaleLowerCase(language.locale)]
+  const recommendedPhrases = [...verbPhrases, ...(captureExample?.phrases || []), ...(collectionStudy?.phrases || []), ...(savedStudy?.phrases || [])]
+  const familyForms = [...(collectionStudy?.forms || []), ...(captureExample?.forms || []), ...(learningMeta?.familyForms || []), formHint, ...(verbNote?.variants || []), ...(savedStudy?.forms || [])].filter(Boolean)
+  const content = item ? buildReviewCardContent({ ...item, sentenceTargetForm: item.sentenceTargetForm || collectionStudy?.sentenceTargetForm, sentenceFormNote: item.sentenceFormNote || collectionStudy?.sentenceFormNote }, familyForms, recommendedPhrases) : null
+  const study = getDailyVerbStudy(item?.word, languageKey)
+  const reusableChunks = study.chunks.length ? study.chunks : captureExample?.chunks || collectionStudy?.chunks || savedStudy?.chunks || []
+  const chunkParts = reusableChunks.length ? reusableChunks.map(({ text, meaning }) => ({ word: text, meaning })) : item?.kind === 'phrase' ? content?.chunks || [] : []
   const sourceEvidence = useFinnishEvidence(item, language, content?.variant?.form)
+
+  useEffect(() => {
+    if (!item || item.kind === 'phrase' || study.persons.length || (content.forms.length > 1 && reusableChunks.length && content.phrases.length > 1)) return undefined
+    const cache = readStoredValue('lingo-word-studies-v4', {})
+    if (cache[studyKey]) {
+      setGeneratedStudy({ key: studyKey, value: cache[studyKey] })
+      setStudyStatus('ready')
+      return undefined
+    }
+    const controller = new AbortController()
+    setStudyStatus('loading')
+    fetch('/api/word-study', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ word: item.word, english: item.english || '', targetLanguage: language.name, sentence: item.sentence, expression: item.expression?.sentence }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Word study unavailable.')
+        return response.json()
+      })
+      .then((value) => {
+        if (!Array.isArray(value.forms) || !Array.isArray(value.chunks)) throw new Error('Incomplete word study.')
+        setGeneratedStudy({ key: studyKey, value })
+        setStudyStatus('ready')
+        try { window.localStorage.setItem('lingo-word-studies-v4', JSON.stringify({ ...cache, [studyKey]: value })) } catch { /* Keep the study available for this visit. */ }
+      })
+      .catch((error) => { if (error.name !== 'AbortError') setStudyStatus('error') })
+    return () => controller.abort()
+  }, [studyKey, item?.kind, item?.word, item?.english, item?.sentence, item?.expression?.sentence, language.name, study.persons.length, content?.forms.length, content?.phrases.length, reusableChunks.length, studyAttempt])
   if (!item) return null
   const isSaved = reviewItems.some((savedItem) => savedItem.word === item.word)
-  const showUsefulVerb = learningMeta?.verb && learningMeta.verb.toLowerCase() !== item.word?.toLowerCase()
-  const hasRelated = Boolean(showUsefulVerb || item.relatedWords?.length)
   const tabs = [
     { id: 'phrases', label: 'Phrases' },
     { id: 'forms', label: 'Forms' },
@@ -2451,7 +2503,7 @@ function WordDetailView({ item, language, reviewItems, onBack, onAddRelatedWord,
   return (
     <div id="content" className="min-h-full bg-cream px-5 pb-6 pt-5">
       <header className="grid min-h-11 grid-cols-[44px_1fr_44px] items-center">
-        <button onClick={onBack} aria-label="Back to collection" className="grid h-11 w-11 place-items-center rounded-full bg-white text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><ChevronLeft /></button>
+        <button onClick={onBack} aria-label={backLabel} className="grid h-11 w-11 place-items-center rounded-full bg-white text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><ChevronLeft /></button>
         <p className="text-center text-sm font-bold text-moss">Word card</p>
         {isSaved && <button onClick={() => setDeleteOpen(true)} aria-label={`Delete ${item.word}`} className="grid h-11 w-11 place-items-center rounded-full bg-white text-stone-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 active:scale-95"><Trash2 size={19} /></button>}
       </header>
@@ -2472,13 +2524,35 @@ function WordDetailView({ item, language, reviewItems, onBack, onAddRelatedWord,
           {tabs.map((tab, index) => <button key={tab.id} ref={(element) => { tabRefs.current[index] = element }} id={`word-detail-tab-${tab.id}`} role="tab" aria-selected={activeTab === tab.id} aria-controls={`word-detail-panel-${tab.id}`} tabIndex={activeTab === tab.id ? 0 : -1} onClick={() => setActiveTab(tab.id)} onKeyDown={(event) => handleTabKeyDown(event, index)} className={cn('min-h-11 whitespace-nowrap rounded-[14px] px-1 text-xs font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white', activeTab === tab.id ? 'bg-white text-ink' : 'text-white/80')}>{tab.label}</button>)}
         </div>
         <div id={`word-detail-panel-${activeTab}`} role="tabpanel" aria-labelledby={`word-detail-tab-${activeTab}`} tabIndex={0} className="min-h-[190px] rounded-b-[24px] border border-t-0 border-black/[.06] bg-white p-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss">
-          {activeTab === 'phrases' && (content.phrases.length ? <div className="divide-y divide-black/[.07]">{content.phrases.map((phrase) => <div key={phrase.text} className="flex items-start justify-between gap-3 py-3 first:pt-0 last:pb-0"><div><p className="font-serif text-lg font-semibold leading-6 text-ink"><HighlightedPhrase text={phrase.text} form={content.variant?.form} locale={language.locale} /></p><PhraseTranslation phrase={phrase} language={language} onResolved={(text, translation) => onPhraseTranslation(item, text, translation)} />{phrase.text === item.sentence && content.variant && <p className="mt-1 text-xs font-semibold leading-5 text-cinnamon">{item.word} → {content.variant.form}{content.variant.meaning ? `: “${content.variant.meaning}”` : ''}</p>}</div><button onClick={() => speak(phrase.text, language.locale)} aria-label={`Play ${phrase.text}`} className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-cream text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><Volume2 size={20} /></button></div>)}</div> : <p className="text-sm leading-5 text-stone-600">No example has been saved with this sticker yet. Hear the word above, then try it in your own sentence.</p>)}
-          {activeTab === 'forms' && (item.kind === 'phrase' ? <p className="text-sm leading-5 text-stone-600">This is a complete phrase. Open Chunks to hear its parts.</p> : <div><p className="text-xs font-bold uppercase tracking-[.14em] text-cinnamon">Word forms</p><p className="mt-4 text-sm text-stone-600">Base form <span className="font-semibold text-ink">{content.forms[0].form}</span></p>{content.variant ? <div className="mt-4 border-t border-black/[.07] pt-4"><div className="flex items-baseline justify-between gap-3"><span className="font-serif text-xl font-bold text-ink">{content.variant.form}</span><span className="text-right text-sm text-stone-600">{content.variant.meaning}</span></div>{(item.formChange || item.formReason) && item.form === content.variant.form && <details className="mt-4 text-xs leading-5 text-stone-600"><summary className="min-h-11 cursor-pointer font-semibold text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss">Why this form?</summary><p>{item.formChange}{item.formChange && item.formReason ? ' ' : ''}{item.formReason}</p></details>}</div> : <p className="mt-4 border-t border-black/[.07] pt-4 text-sm leading-5 text-stone-600">No other form is verified in this example.</p>}</div>)}
-          {activeTab === 'chunks' && (content.frame ? <div><p className="text-sm leading-5 text-stone-600">Keep the beginning. Change the last piece.</p><p className="mt-3 font-serif text-xl font-bold text-ink">{content.frame.fixed} <span className="text-cinnamon">…</span></p><div className="mt-4 divide-y divide-black/[.07]">{content.frame.choices.map((choice) => <div key={choice.text} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"><div><p className="font-serif text-lg font-semibold text-ink">{choice.variable}</p><PhraseTranslation phrase={choice} language={language} onResolved={(text, translation) => onPhraseTranslation(item, text, translation)} /></div><button onClick={() => speak(choice.text, language.locale)} aria-label={`Play ${choice.text}`} className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-cream text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><Volume2 size={19} /></button></div>)}</div></div> : <div><p className="text-sm leading-5 text-stone-600">{content.chunks.length > 1 ? 'Hear the example in pieces.' : 'Hear this word on its own.'}</p><div className="mt-3 divide-y divide-black/[.07]">{content.chunks.map((part, index) => <div key={`${part.word}-${index}`} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"><div><p className="font-serif text-lg font-semibold text-ink">{part.word}</p>{part.meaning && <p className="mt-1 text-sm text-stone-600">{part.meaning}</p>}</div><button onClick={() => speak(part.word, language.locale)} aria-label={`Play ${part.word}`} className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-cream text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><Volume2 size={19} /></button></div>)}</div></div>)}
+          {activeTab === 'phrases' && (content.phrases.length ? <div className="divide-y divide-black/[.07]">{content.phrases.map((phrase) => <div key={phrase.text} className="flex items-start justify-between gap-3 py-3 first:pt-0 last:pb-0"><div><p className="font-serif text-lg font-semibold leading-6 text-ink"><HighlightedPhrase text={phrase.text} form={phrase.targetForm} locale={language.locale} /></p><PhraseTranslation phrase={phrase} language={language} onResolved={(text, translation) => onPhraseTranslation(item, text, translation)} />{phrase.formNote ? <p className="mt-1 text-xs leading-5 text-cinnamon">{phrase.formNote}</p> : phrase.text === item.sentence && content.variant ? <p className="mt-1 text-xs font-semibold leading-5 text-cinnamon">{item.word} → {content.variant.form}{content.variant.meaning ? `: “${content.variant.meaning}”` : ''}</p> : null}</div><button onClick={() => speak(phrase.text, language.locale)} aria-label={`Play ${phrase.text}`} className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-cream text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><Volume2 size={20} /></button></div>)}</div> : <p className="text-sm leading-5 text-stone-600">No example has been saved with this sticker yet. Hear the word above, then try it in your own sentence.</p>)}
+          {activeTab === 'phrases' && item.kind !== 'phrase' && content.phrases.length < 2 && studyStatus === 'loading' && <p role="status" className="mt-4 text-sm text-stone-600">Finding another example…</p>}
+          {activeTab === 'phrases' && item.kind !== 'phrase' && content.phrases.length < 2 && studyStatus === 'error' && <button type="button" onClick={() => setStudyAttempt((attempt) => attempt + 1)} className="mt-4 min-h-11 text-sm font-semibold text-cinnamon underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss">Try finding another example</button>}
+          {activeTab === 'forms' && (study.persons.length ? <div><p className="text-xs font-bold uppercase tracking-[.14em] text-cinnamon">Present tense</p><p className="mt-3 text-sm text-stone-600">Base form <span className="font-semibold text-ink">{item.word}</span></p><VerbPersonForms study={study} />{language.locale.startsWith('sv') && <p className="mt-4 text-xs leading-5 text-stone-600">Swedish uses the same present-tense verb form with every subject.</p>}</div> : item.kind === 'phrase' ? <p className="text-sm leading-5 text-stone-600">This is a complete phrase. Open Chunks to hear its parts.</p> : <div>
+            <div className="divide-y divide-black/[.07]">
+              {content.forms.map(({ form, meaning }, index) => <div key={form} className="py-3 first:pt-0 last:pb-0">
+                <div className="flex items-baseline justify-between gap-3"><span className="font-serif text-xl font-bold text-ink">{form}</span><span className="text-right text-sm text-stone-600">{index === 0 ? 'Base form' : meaning}</span></div>
+                {form === content.variant?.form && item.form === form && (item.formChange || item.formReason) && <details className="mt-2 text-xs leading-5 text-stone-600"><summary className="min-h-11 cursor-pointer font-semibold text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss">Why this form?</summary><p>{item.formChange}{item.formChange && item.formReason ? ' ' : ''}{item.formReason}</p></details>}
+              </div>)}
+            </div>
+            {studyStatus === 'loading' && content.forms.length === 1 && <p className="mt-4 text-sm text-stone-600" role="status">Finding more forms for this word…</p>}
+            {content.forms.length === 1 && studyStatus !== 'loading' && <p className="mt-4 text-sm leading-5 text-stone-600">More forms will appear when they are available for this word.</p>}
+          </div>)}
+          {activeTab === 'chunks' && (
+            <div>
+              <p className="text-sm leading-5 text-stone-600">{reusableChunks.length ? 'Short combinations to use in your own sentences.' : studyStatus === 'loading' && item.kind !== 'phrase' ? 'Finding reusable combinations…' : 'No reusable combinations are available yet.'}</p>
+              {studyStatus === 'error' && item.kind !== 'phrase' && !reusableChunks.length && <button type="button" onClick={() => setStudyAttempt((attempt) => attempt + 1)} className="mt-3 min-h-11 text-sm font-semibold text-cinnamon underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss">Try again</button>}
+              <div className="mt-3 divide-y divide-black/[.07]">
+                {chunkParts.map((part, index) => (
+                  <div key={`${part.word}-${index}`} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                    <div><p className="font-serif text-lg font-semibold text-ink">{part.word}</p>{part.meaning && <p className="mt-1 text-sm text-stone-600">{part.meaning}</p>}</div>
+                    <button onClick={() => speak(part.word, language.locale)} aria-label={`Play ${part.word}`} className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-cream text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"><Volume2 size={19} /></button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </section>
-
-      {hasRelated && <section className="mt-5 rounded-[24px] border border-black/[.06] bg-white p-5"><p className="text-xs font-bold uppercase tracking-[.14em] text-cinnamon">Keep exploring</p>{showUsefulVerb && <p className="mt-3 text-sm text-stone-600">Useful verb: <span className="font-serif text-lg font-bold text-ink">{learningMeta.verb}</span> · {learningMeta.verbMeaning}</p>}{item.relatedWords?.map((word) => { const wordSaved = reviewItems.some((savedItem) => savedItem.word === word.word); return <div key={word.word} className="mt-3 flex items-center justify-between gap-3"><div><p className="font-serif text-lg font-bold text-ink">{word.word}</p><p className="text-sm text-stone-600">{word.english}</p></div><button onClick={() => onAddRelatedWord(word)} disabled={wordSaved} className="min-h-11 min-w-11 rounded-full bg-cream px-3 text-xs font-bold text-cinnamon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss disabled:text-stone-500">{wordSaved ? 'Saved' : 'Add'}</button></div> })}</section>}
 
       {!isSaved && <Button onClick={() => onAddRelatedWord(item)} className="mt-5 w-full" size="lg"><Sparkles size={19} />Add to my collection</Button>}
       {deleteOpen && <DeleteStickerDialog item={item} onDelete={onDelete} onClose={() => setDeleteOpen(false)} />}
@@ -2759,40 +2833,18 @@ function MatchingView({ onAnswer, items, language, rewardAvailable, onBack, onMi
   )
 }
 
-function CollectionFolder({ collection, onSelect, gravity, bindGravity }) {
-  const countText = `${collection.items.length} ${collection.items.length === 1 ? 'word' : 'words'}`
-  const previewItems = collection.items.slice(0, 6)
-  const isSmallCollection = previewItems.length <= 2
-  const offsetProfiles = [
-    { x: -128, y: 28, rotate: -16, weight: 22 },
-    { x: -78, y: 10, rotate: -7, weight: 14 },
-    { x: -24, y: 28, rotate: 4, weight: 18 },
-    { x: 34, y: 14, rotate: -3, weight: 13 },
-    { x: 90, y: 26, rotate: 12, weight: 20 },
-    { x: 134, y: 40, rotate: 18, weight: 24 },
-  ]
+function CollectionStickerCard({ item, languageKey, onOpen }) {
+  const pronunciation = getIpa(languageKey, item)
 
   return (
-    <button {...bindGravity} onClick={onSelect} className={cn('group relative block w-full overflow-hidden rounded-[28px] bg-[#F6F6F6] px-5 pb-0 pt-4 text-left shadow-[0_0_0_1px_rgba(38,35,49,.045)] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-400 active:scale-[.98]', isSmallCollection ? 'min-h-[156px]' : 'min-h-[214px]')}>
-      <span className="pointer-events-none absolute inset-x-0 top-0 z-20 h-20 bg-gradient-to-b from-[#F6F6F6] via-[#F6F6F6]/94 to-transparent" />
-      <span className="absolute left-5 right-5 top-4 z-30 flex items-start justify-between gap-4">
-        <span className="max-w-[15rem] text-xl font-semibold leading-none tracking-[-.025em] text-ink">{collection.name}</span>
-        <span className="grid h-8 min-w-8 shrink-0 place-items-center rounded-full bg-white/85 px-2 text-xs font-black tabular-nums text-stone-500 shadow-[0_0_0_1px_rgba(38,35,49,.04)]">{collection.items.length}</span>
+    <button type="button" onClick={() => onOpen(item)} aria-label={`Open ${item.word}${pronunciation ? `, pronounced ${pronunciation}` : ''}`} className="group relative flex min-h-[128px] min-w-0 flex-col items-center rounded-[14px] bg-[#f3f2f0] px-1.5 pb-2 pt-[68px] text-center shadow-[0_1px_2px_rgba(38,35,49,.06),0_5px_14px_rgba(38,35,49,.07)] transition-transform duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss active:scale-[.97]">
+      <span className="pointer-events-none absolute inset-x-0 -top-6 grid h-[72px] place-items-center transition-transform duration-150 ease-out group-hover:-translate-y-1 motion-reduce:transition-none">
+        <Sticker item={item} card loading="lazy" />
       </span>
-      {isSmallCollection ? <span className="absolute inset-x-5 bottom-1 z-10 flex h-[96px] items-center justify-start gap-8" aria-label={`${countText} in ${collection.name}`}>{previewItems.map((item, index) => <span key={item.word} className="grid place-items-center transition-transform duration-200 ease-out motion-reduce:transition-none" style={{ transform: `translate3d(${gravity.x * (10 + index * 4)}px, ${gravity.y * (7 + index * 3)}px, 0) rotate(${gravity.x * (6 + index * 2)}deg)` }}><Sticker item={item} /></span>)}</span> : <span className="absolute inset-x-0 bottom-0 z-10 h-[148px] overflow-hidden" aria-label={`${countText} in ${collection.name}`}>
-        {previewItems.map((item, index) => {
-          const profile = offsetProfiles[index] || offsetProfiles[offsetProfiles.length - 1]
-          const translateX = profile.x + gravity.x * profile.weight
-          const translateY = profile.y + Math.abs(gravity.x) * 4 + gravity.y * 4
-          const rotate = profile.rotate + gravity.x * 9
-          return (
-            <span key={item.word} className="absolute left-1/2 top-0 transition-transform duration-200 ease-out will-change-transform" style={{ transform: `translate3d(calc(-50% + ${translateX}px), ${translateY}px, 0) rotate(${rotate}deg) scale(1.42)` }}>
-              <Sticker item={item} large />
-            </span>
-          )
-        })}
-      </span>}
-      <span className={cn('pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-b from-white/45 to-white/88 backdrop-blur-[2px]', isSmallCollection ? 'h-[42px]' : 'h-[66px]')} aria-hidden="true" />
+      <span className="relative flex w-full flex-col items-center justify-start">
+        <span className="w-full break-words font-serif text-[16px] font-semibold leading-[1.05] tracking-[-.035em] text-ink">{item.word}</span>
+        {pronunciation && <span className="mt-1 w-full break-words text-xs font-medium leading-4 text-stone-600">{pronunciation}</span>}
+      </span>
     </button>
   )
 }
@@ -2998,7 +3050,7 @@ function PrivacySheet({ onClose }) {
     <Sheet title="Privacy & photos" onClose={onClose}>
       <div className="mt-5 space-y-5 text-sm leading-6 text-stone-600">
         <section><h3 className="font-bold text-ink">No account required</h3><p className="mt-1">Your profile, saved words, and learning progress are stored in this browser on your device. Clearing browser data removes them.</p></section>
-        <section><h3 className="font-bold text-ink">Photos you choose</h3><p className="mt-1">When you tap Analyze, the photo is sent to our language-analysis service so it can identify a word or phrase. Don’t capture personal documents, faces, or sensitive information.</p></section>
+        <section><h3 className="font-bold text-ink">Photos you choose</h3><p className="mt-1">When you tap Analyze, the photo is sent to our language-analysis service so it can identify a word or phrase. Object cutouts are made on your device. Don’t capture personal documents, faces, or sensitive information.</p></section>
         <section><h3 className="font-bold text-ink">Saved learning cards</h3><p className="mt-1">The word and learning details you save stay on this device. We don’t create a cloud account or sync your library in this beta.</p></section>
       </div>
       <Button type="button" onClick={onClose} className="mt-7 w-full" size="lg">Got it</Button>
@@ -3008,15 +3060,6 @@ function PrivacySheet({ onClose }) {
 
 function CollectionDetailView({ languageKey, collection, onBack, onOpenWord }) {
   if (!collection) return null
-
-  const scatter = [
-    'rotate-[-8deg] translate-y-1',
-    'rotate-[6deg] -translate-y-3',
-    'rotate-[3deg] translate-y-2',
-    'rotate-[-5deg] -translate-y-1',
-    'rotate-[8deg] translate-y-4',
-    'rotate-[-2deg] -translate-y-2',
-  ]
 
   return (
     <div id="content" className="collection-page px-5 pt-5">
@@ -3032,34 +3075,23 @@ function CollectionDetailView({ languageKey, collection, onBack, onOpenWord }) {
         <p className="mx-auto mt-3 max-w-[18rem] text-sm leading-5 text-stone-600">Tap any sticker to open the learning card, hear it, and practice the sentence.</p>
       </section>
 
-      <section className="collection-sticker-stage relative mt-7 min-h-[440px] rounded-[36px] bg-[#f2f1f0] px-4 py-6 shadow-[0_0_0_1px_rgba(38,35,49,.045)]">
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-24 rounded-t-[36px] bg-gradient-to-b from-white/80 to-transparent" />
-        <div className="relative grid grid-cols-2 gap-x-4 gap-y-7">
-          {collection.items.map((item, index) => (
-            <button
-              key={item.word}
-              onClick={() => onOpenWord(item)}
-              aria-label={`Learn ${item.word}`}
-              className={cn('scatter-sticker group grid min-h-[156px] place-items-center rounded-[28px] px-2 py-3 text-center transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-400 active:scale-[.96]', scatter[index % scatter.length])}
-              style={{ animationDelay: `${120 + Math.min(index, 7) * 48}ms` }}
-            >
-              <Sticker item={item} large />
-              <span className="mt-1 max-w-full truncate font-serif text-2xl font-bold leading-tight text-ink">{item.word}</span>
-              <Ipa value={getIpa(languageKey, item) || item.ipa} className="-mt-1 block max-w-full truncate text-sm font-semibold text-moss" />
-            </button>
-          ))}
+      <section className="collection-sticker-stage mt-7 pt-7" aria-label={`${collection.name} stickers`}>
+        <div className="grid grid-cols-2 gap-x-2.5 gap-y-8 min-[360px]:grid-cols-3">
+          {collection.items.map((item) => <CollectionStickerCard key={item.word} item={item} languageKey={languageKey} onOpen={onOpenWord} />)}
         </div>
       </section>
     </div>
   )
 }
 
-function ReviewView({ items, practiceItems = [], dueCount = 0, logAvailable, woodFull, onCapture, onStartQuiz, onOpenCollection }) {
-  const { gravity, bindGravity } = useStickerGravity()
+function ReviewView({ languageKey, items, practiceItems = [], selectedCollection, onSelectCollection, dueCount = 0, logAvailable, woodFull, onCapture, onStartQuiz, onOpenWord }) {
   const collections = [
     ...(practiceItems.length ? [{ name: 'Needs practice', items: practiceItems }] : []),
     ...getWordCollections(items),
   ]
+  const activeCollection = collections.find((collection) => collection.name === selectedCollection)
+  const activeFilter = activeCollection?.name || 'All'
+  const visibleItems = activeCollection?.items || items
   const sessionCount = Math.min(dueCount || items.length, 5)
 
   return (
@@ -3081,14 +3113,18 @@ function ReviewView({ items, practiceItems = [], dueCount = 0, logAvailable, woo
             </div>
           </section>
 
-          <section className="mt-7" aria-labelledby="collections-title">
-            <div className="flex items-end justify-between gap-4">
-              <h2 id="collections-title" className="text-[22px] font-semibold leading-tight tracking-[-.03em] text-ink">Collections</h2>
-            </div>
-            <div className="mt-4 grid gap-4">
-              {collections.map((collection) => (
-                <CollectionFolder key={collection.name} collection={collection} gravity={gravity} bindGravity={bindGravity} onSelect={() => onOpenCollection(collection)} />
+          <section className="mt-8" aria-label="Sticker gallery">
+            <div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-2" aria-label="Filter stickers by collection">
+              {[{ name: 'All', items }, ...collections].map((collection) => (
+                <button key={collection.name} type="button" aria-pressed={activeFilter === collection.name} onClick={() => onSelectCollection(collection.name)} className={cn('flex min-h-11 shrink-0 items-center gap-2 rounded-full border px-4 text-sm font-semibold transition-[background-color,color,border-color] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss active:scale-[.98]', activeFilter === collection.name ? 'border-ink bg-ink text-white' : 'border-black/[.08] bg-white text-ink')}>
+                  {collection.name}<span className={cn('text-xs tabular-nums', activeFilter === collection.name ? 'text-white/70' : 'text-stone-500')}>{collection.items.length}</span>
+                </button>
               ))}
+            </div>
+            <div className="mt-3 pt-7">
+              <div className="grid grid-cols-2 gap-x-2.5 gap-y-8 min-[360px]:grid-cols-3">
+                {visibleItems.map((item) => <CollectionStickerCard key={item.word} item={item} languageKey={languageKey} onOpen={onOpenWord} />)}
+              </div>
             </div>
           </section>
         </>

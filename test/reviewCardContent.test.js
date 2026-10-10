@@ -41,13 +41,22 @@ test('older sparse cards still have meaningful tab content', () => {
   assert.deepEqual(content.chunks, [{ word: 'ovi', meaning: 'door' }])
 })
 
-test('forms only teach a changed form that appears in the saved example', () => {
+test('curated forms appear on collection cards even when another form is used in the example', () => {
   const content = buildReviewCardContent({
     word: 'vesipullo', english: 'water bottle', form: 'vesipullossa', formMeaning: 'in the water bottle',
     sentence: 'Minulla on vesipullo laukussa.',
-  }, [{ form: 'vesipullon', meaning: 'of the bottle' }])
+  }, [{ form: 'vesipullon', meaning: 'of the bottle' }, { form: 'vesipulloa', meaning: 'some bottle' }])
   assert.equal(content.variant, null)
-  assert.deepEqual(content.forms.map((entry) => entry.form), ['vesipullo'])
+  assert.deepEqual(content.forms.map((entry) => entry.form), ['vesipullo', 'vesipullon', 'vesipulloa'])
+  assert.ok(!content.forms.some((entry) => entry.form === 'vesipullossa'))
+})
+
+test('chunks do not repeat full phrases and duplicate parts are removed', () => {
+  const content = buildReviewCardContent({
+    word: 'ovi', english: 'door', sentence: 'Ovi on auki.',
+    sentenceParts: [{ word: 'Ovi on auki.', meaning: 'The door is open.' }, { word: 'ovi', meaning: 'door' }, { word: 'Ovi', meaning: 'door' }],
+  })
+  assert.deepEqual(content.chunks.map((part) => part.word), ['ovi'])
 })
 
 test('chunks use a frame only when the examples change one final word', () => {

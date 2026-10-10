@@ -80,3 +80,27 @@ export const dailyVerbNotes = {
     ], 'Vara becomes är in the present tense.'),
   },
 }
+
+// Present-tense forms follow the person order in getDailyVerbPersons.
+export const dailyVerbDetails = {
+  fi: {
+    syödä: { forms: ['syön', 'syöt', 'syö', 'syömme', 'syötte', 'syövät'], chunks: [['syödä aamupalaa', 'eat breakfast'], ['syödä ulkona', 'eat out']] },
+    juoda: { forms: ['juon', 'juot', 'juo', 'juomme', 'juotte', 'juovat'], chunks: [['juoda teetä', 'drink tea'], ['juoda hitaasti', 'drink slowly']] },
+    täyttää: { forms: ['täytän', 'täytät', 'täyttää', 'täytämme', 'täytätte', 'täyttävät'], chunks: [['täyttää lomake', 'fill in a form'], ['täyttää ämpäri', 'fill a bucket']] },
+    avata: { forms: ['avaan', 'avaat', 'avaa', 'avaamme', 'avaatte', 'avaavat'], chunks: [['avata paketti', 'open a package'], ['avata sovellus', 'open an app']] },
+    lukea: { forms: ['luen', 'luet', 'lukee', 'luemme', 'luette', 'lukevat'], chunks: [['lukea ääneen', 'read aloud'], ['lukea viesti', 'read a message']] },
+    mennä: { forms: ['menen', 'menet', 'menee', 'menemme', 'menette', 'menevät'], chunks: [['mennä töihin', 'go to work'], ['mennä bussilla', 'go by bus']] },
+    ottaa: { forms: ['otan', 'otat', 'ottaa', 'otamme', 'otatte', 'ottavat'], chunks: [['ottaa kuva', 'take a photo'], ['ottaa mukaan', 'take along']] },
+    olla: { forms: ['olen', 'olet', 'on', 'olemme', 'olette', 'ovat'], chunks: [['olla valmis', 'be ready'], ['olla lähellä', 'be nearby']] },
+  },
+  sv: {
+    äta: { present: 'äter', chunks: [['äta frukost', 'eat breakfast'], ['äta ute', 'eat out']] },
+    dricka: { present: 'dricker', chunks: [['dricka te', 'drink tea'], ['dricka långsamt', 'drink slowly']] },
+    fylla: { present: 'fyller', chunks: [['fylla i ett formulär', 'fill in a form'], ['fylla en hink', 'fill a bucket']] },
+    öppna: { present: 'öppnar', chunks: [['öppna ett paket', 'open a package'], ['öppna en app', 'open an app']] },
+    läsa: { present: 'läser', chunks: [['läsa högt', 'read aloud'], ['läsa ett meddelande', 'read a message']] },
+    gå: { present: 'går', chunks: [['gå hem', 'go home'], ['gå till jobbet', 'go to work']] },
+    ta: { present: 'tar', chunks: [['ta ett foto', 'take a photo'], ['ta med', 'take along']] },
+    vara: { present: 'är', chunks: [['vara redo', 'be ready'], ['vara nära', 'be nearby']] },
+  },
+}

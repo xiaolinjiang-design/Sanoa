@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import { handleAnalyzeRequest } from './server/deepseek.js'
 import { handleFinnishSourceRequest } from './server/finnishSources.js'
 import { handleTranslationRequest } from './server/translation.js'
+import { handleWordStudyRequest } from './server/wordStudy.js'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
@@ -18,6 +19,7 @@ export default defineConfig(({ mode }) => {
         configureServer(server) {
           server.middlewares.use('/api/analyze', (request, response) => handleAnalyzeRequest(request, response, env.DEEPSEEK_API_KEY))
           server.middlewares.use('/api/translate', (request, response) => handleTranslationRequest(request, response, env.DEEPSEEK_API_KEY))
+          server.middlewares.use('/api/word-study', (request, response) => handleWordStudyRequest(request, response, env.DEEPSEEK_API_KEY))
           server.middlewares.use('/api/lexicon', handleFinnishSourceRequest)
         },
       },
